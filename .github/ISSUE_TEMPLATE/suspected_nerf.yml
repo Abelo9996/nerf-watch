@@ -7,7 +7,7 @@ body:
       value: |
         Attach the anonymized report so others can compare. Generate it with:
 
-            npx github:Abelo9996/nerf-watch report --out nerf-watch-report.md
+            npx nerf-watch report --out nerf-watch-report.md
 
         It contains only aggregate numbers, CLI versions, model ids and dates. Read it before posting.
   - type: textarea

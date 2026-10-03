@@ -15,15 +15,15 @@ It is not a cost meter. Tools like [ccusage](https://github.com/ryoppippi/ccusag
 Requires Node.js 20 or newer.
 
 ```sh
-npx github:Abelo9996/nerf-watch check
+npx nerf-watch check
 ```
 
 That reads every Claude Code and Codex session on the machine, prints what changed, and exits with status 1 if any alert fired. Other commands:
 
 ```sh
-npx github:Abelo9996/nerf-watch scan                          # baselines per CLI version and model
-npx github:Abelo9996/nerf-watch check --since 30d --agent claude
-npx github:Abelo9996/nerf-watch report --out nerf-watch-report.md   # anonymized, shareable
+npx nerf-watch scan                          # baselines per CLI version and model
+npx nerf-watch check --since 30d --agent claude
+npx nerf-watch report --out nerf-watch-report.md   # anonymized, shareable
 ```
 
 ## Example

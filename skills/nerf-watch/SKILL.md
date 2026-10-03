@@ -7,15 +7,15 @@ description: Check whether a coding agent (Claude Code, Codex) quietly got worse
 
 nerf-watch reads the session logs Claude Code and Codex already keep on this machine and reports changes the user did not make: a different model answering, lower reasoning effort, a smaller context window, more cache writes or uncached input per turn after a CLI update, a cache hit rate collapse, or more failing tool calls. It is local only and never uploads anything.
 
-Run it with `npx github:Abelo9996/nerf-watch <command>` (or `nerf-watch <command>` if installed). Node 20+ is required.
+Run it with `npx nerf-watch <command>` (or `nerf-watch <command>` if installed). Node 20+ is required.
 
 ## Workflow
 
-1. **Check first.** Run `npx github:Abelo9996/nerf-watch check`. Exit code 1 means at least one alert; that is a result, not a failure of the command. Add `--agent claude` or `--agent codex` if the user only cares about one, and `--since 30d` if they mention a recent change.
+1. **Check first.** Run `npx nerf-watch check`. Exit code 1 means at least one alert; that is a result, not a failure of the command. Add `--agent claude` or `--agent codex` if the user only cares about one, and `--since 30d` if they mention a recent change.
 2. **Read the findings, then explain them.** Each finding has a severity, before and after numbers with CLI versions, dates and sample counts, and a plain explanation. Summarize the alerts first, in the user's terms (cost, rate limits, quality). Quote the numbers and versions; do not round them into vague claims.
 3. **Rule out the user's own changes before calling something a nerf.** nerf-watch cannot see intent. Ask, or check, whether the user changed the model, effort setting, plan, or the kind of work they were doing around the flagged date. `-drift` findings compare the same CLI version and model over time, so they are the strongest evidence of a provider-side change; `-shift` findings happen at a CLI update. Tool error jumps are often the user's environment (for example a broken test suite), so say so. Token and tool error findings already require the change to appear in at least two of the user's projects, and subagent traffic and user-chosen effort are excluded, but a change in plan, config or hooks can still move every project at once.
 4. **Show baselines when asked "what changed".** `scan` prints one row per (agent, CLI version, model) with median tokens per turn, cache hit rate and tool error rate. Use it to show the trend around a finding.
-5. **Offer a shareable report** when the user wants to file a bug or post publicly: `npx github:Abelo9996/nerf-watch report --out nerf-watch-report.md` (or `.json`). It contains only aggregate numbers, versions, model ids and dates. Tell the user to read it before sharing.
+5. **Offer a shareable report** when the user wants to file a bug or post publicly: `npx nerf-watch report --out nerf-watch-report.md` (or `.json`). It contains only aggregate numbers, versions, model ids and dates. Tell the user to read it before sharing.
 
 ## Useful flags
 

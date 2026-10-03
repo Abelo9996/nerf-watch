@@ -12,7 +12,7 @@ npm test           # builds, then runs vitest
 node dist/cli.js scan
 ```
 
-Node 20 or newer. No native dependencies; keep it that way so `npx github:Abelo9996/nerf-watch` works everywhere.
+Node 20 or newer. No native dependencies; keep it that way so `npx nerf-watch` (and installs straight from GitHub) work everywhere.
 
 ## Ground rules
 
