@@ -8,6 +8,7 @@ import { bold, countBySeverity, datasetSummary, dim, formatFinding, SEGMENT_ALIG
 import { loadDataset } from "./load.js";
 import { buildSegments } from "./metrics.js";
 import { buildReport, reportToMarkdown, toolVersion } from "./report.js";
+import { buildSharePayload, localIdentifiers, openInBrowser, scanPayload, shareLink, type SharePayload } from "./share.js";
 import type { Severity } from "./types.js";
 import { parseAgents, parseRoots, parseSince, UsageError } from "./options.js";
 
@@ -28,6 +29,68 @@ function noData(json: boolean | undefined): void {
     "(override with CLAUDE_CONFIG_DIR, CODEX_HOME or --root agent=dir).";
   if (json) console.log(JSON.stringify({ error: "no-data", message: msg }));
   else console.log(msg);
+}
+
+interface ShareOpts extends Common {
+  open?: boolean;
+}
+
+/**
+ * Builds the anonymized share payload, prints exactly what would be shared and
+ * a prefilled issue URL. Opens the browser only with --open. No network calls.
+ */
+async function share(o: ShareOpts): Promise<void> {
+  const ds = await load(o);
+  if (!ds.turns.length) return noData(o.json);
+  const ids = localIdentifiers();
+  const payload: SharePayload = buildSharePayload(ds, runDetectors(ds), ids);
+  const problems = scanPayload(payload, ids);
+  if (problems.length) {
+    console.error("nerf-watch: refusing to share. The anonymized payload still contains something that could identify you:");
+    for (const p of problems) console.error(`  ${p}`);
+    console.error("Nothing was printed or opened. Please report this as a nerf-watch bug (without the values).");
+    process.exitCode = 2;
+    return;
+  }
+  if (!payload.findings.length) {
+    const msg = "No warning or alert findings, so there is nothing to share.";
+    if (o.json) console.log(JSON.stringify({ payload, url: null, reportPrefilled: false, message: msg }, null, 2));
+    else console.log(msg);
+    return;
+  }
+  const link = shareLink(payload);
+  if (o.json) {
+    console.log(JSON.stringify({ payload, url: link.url, reportPrefilled: link.reportPrefilled }, null, 2));
+  } else {
+    console.log(bold(`This is exactly what would be shared (${payload.findings.length} finding(s)). Nothing has been sent:`));
+    console.log("");
+    console.log(link.json);
+    console.log("");
+    console.log(
+      dim(
+        "It holds only detector ids, severities, CLI versions, model ids, dates, sample counts and before/after values. " +
+          "No prompts, paths, project names, session ids, user or host names.",
+      ),
+    );
+    console.log("");
+    if (link.reportPrefilled) {
+      console.log(bold("To share it, open this link. It is a prefilled public GitHub issue on open-agent-lab; review it and submit:"));
+    } else {
+      console.log(
+        bold(
+          `The JSON is too long to prefill in a link. This link opens the form with the other fields filled in; ` +
+            `paste the JSON above into "Anonymized nerf-watch report (JSON)":`,
+        ),
+      );
+    }
+    console.log(link.url);
+  }
+  if (o.open) {
+    if (openInBrowser(link.url)) console.error(dim("Opened the form in your browser."));
+    else console.error("nerf-watch: could not open a browser. Copy the link above instead.");
+  } else if (!o.json) {
+    console.log(dim("Run with --open to open it in your browser."));
+  }
 }
 
 export function buildCli() {
@@ -81,15 +144,22 @@ export function buildCli() {
           console.log("");
         }
         console.log(bold(`${counts.alert} alert(s), ${counts.warn} warning(s), ${counts.info} info`));
-        if (findings.length) console.log(dim("Share an anonymized copy with: nerf-watch report --out nerf-watch-report.md"));
+        if (findings.some((f) => f.severity !== "info")) console.log(dim("Share an anonymized summary with the open-agent-lab regression watch: nerf-watch share"));
       }
       const failAt: Severity[] = o.failOn === "warn" ? ["alert", "warn"] : o.failOn === "alert" ? ["alert"] : [];
       if (findings.some((f) => failAt.includes(f.severity))) process.exitCode = 1;
     });
 
+  common(cli.command("share", "Show the anonymized findings to share and print a prefilled regression-report issue link"))
+    .option("--open", "Open the link in your browser")
+    .action(share);
+
   common(cli.command("report", "Write an anonymized, shareable report (no prompts, paths or project names)"))
     .option("--out <file>", "Output file; .md or .json picks the format", { default: "nerf-watch-report.md" })
-    .action(async (o: Common & { out: string }) => {
+    .option("--share", "Same as `nerf-watch share`: print a prefilled regression-report issue link instead of writing a file")
+    .option("--open", "With --share, open the link in your browser")
+    .action(async (o: Common & { out: string; share?: boolean; open?: boolean }) => {
+      if (o.share) return share(o);
       const ds = await load(o);
       if (!ds.turns.length) return noData(o.json);
       const r = buildReport(ds, runDetectors(ds));

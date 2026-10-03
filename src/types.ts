@@ -154,6 +154,8 @@ export interface Finding {
   severity: Severity;
   agent: AgentId;
   model?: string;
+  /** For model-mismatch findings: the model that was requested (`model` is the one that answered). */
+  requestedModel?: string;
   title: string;
   explanation: string;
   evidence: Evidence[];

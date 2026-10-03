@@ -26,6 +26,7 @@ npx nerf-watch check
 npx nerf-watch scan                          # baselines per CLI version and model
 npx nerf-watch check --since 30d --agent claude
 npx nerf-watch report --out nerf-watch-report.md   # anonymized, shareable
+npx nerf-watch share                         # 把匿名发现分享到公开的回归观察页
 ```
 
 ## 示例
@@ -121,6 +122,7 @@ token 类和工具错误类检测，只有当变化在至少两个项目内部�
 
 - 纯本地运行。nerf-watch 只读取你主目录下的文件，结果输出到你的终端。它不发起任何网络请求，也没有任何遥测。
 - `nerf-watch report` 只写入聚合数据：token 中位数、比率、CLI 版本、模型 ID、日期和计数。报告里不包含任何 prompt、响应、工具输出、文件路径、项目名称或会话 ID。看起来像账号专属部署的模型 ID（ARN、URL、很长的数字 ID）会被替换成哈希值。测试套件会在合成日志里埋入哨兵字符串，只要其中任何一个出现在报告里，测试就会失败。
+- `nerf-watch share` 只用结构化字段（检测器、严重级别、模型 ID、CLI 版本、日期、样本数和前后数值）生成更小的匿名 JSON，再逐个扫描所有值，发现路径、邮箱、URL、会话 ID 或本机用户名、主目录名、主机名就拒绝输出（退出码 2）。它会完整打印将要分享的内容，并给出 open-agent-lab 上预填好的 GitHub issue 链接。整个过程不发任何网络请求；只有加 `--open` 时才会打开浏览器。
 - 分享之前请先自己读一遍报告。它就是普通的 markdown 或 JSON。
 
 ## 支持的智能体
@@ -138,7 +140,8 @@ token 类和工具错误类检测，只有当变化在至少两个项目内部�
 nerf-watch scan    [--since WHEN] [--agent ID] [--root AGENT=DIR] [--json]
 nerf-watch check   [--since WHEN] [--agent ID] [--root AGENT=DIR] [--json]
                    [--fail-on alert|warn|never] [--recent-days 7] [--baseline-days 28]
-nerf-watch report  [--since WHEN] [--agent ID] [--root AGENT=DIR] [--json] [--out FILE.md|FILE.json]
+nerf-watch report  [--since WHEN] [--agent ID] [--root AGENT=DIR] [--json] [--out FILE.md|FILE.json] [--share [--open]]
+nerf-watch share   [--since WHEN] [--agent ID] [--root AGENT=DIR] [--json] [--open]
 ```
 
 `WHEN` 可以是日期（`2026-09-01`），也可以是时间跨度（`12h`、`7d`、`4w`）。退出码：0 表示正常，1 表示存在不低于 `--fail-on` 级别的结果，2 表示用法错误。

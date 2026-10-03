@@ -12,7 +12,7 @@ You can expect an acknowledgement within 7 days.
 
 ## In scope
 
-- A report (`report --out`, `--json` output) that contains prompts, paths, project names, session ids or other identifying data
+- A report (`report --out`, `--json` output) or a `share` payload that contains prompts, paths, project names, session ids or other identifying data
 - Any network request made by nerf-watch (it is designed to make none)
 - Reading files outside the agent log directories it documents
 

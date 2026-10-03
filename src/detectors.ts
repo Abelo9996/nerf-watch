@@ -460,6 +460,7 @@ export function detectModelMismatch(ds: Dataset): Finding[] {
       severity,
       agent: g.agent,
       model: g.served,
+      requestedModel: g.req,
       trigger: "event",
       title: `Requested ${g.req} but ${g.served} answered`,
       explanation:

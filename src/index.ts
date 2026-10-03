@@ -16,3 +16,16 @@ export {
 } from "./detectors.js";
 export { buildReport, reportToMarkdown, scrubModel, type Report } from "./report.js";
 export { parseSince } from "./options.js";
+export {
+  buildSharePayload,
+  scanPayload,
+  leakReason,
+  localIdentifiers,
+  shareLink,
+  formatPayload,
+  DETECTOR_SIGNAL,
+  SHARE_SCHEMA,
+  type SharePayload,
+  type ShareFinding,
+  type ShareLink,
+} from "./share.js";

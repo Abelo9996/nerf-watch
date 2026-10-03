@@ -52,17 +52,22 @@ export function buildReport(ds: Dataset, findings: Finding[]): Report {
       };
     });
   const scrubbedFindings = findings.map((f) => {
-    if (!f.model) return f;
-    const clean = scrubModel(f.model);
-    if (clean === f.model) return f;
-    const swap = (s: string) => s.split(f.model!).join(clean);
-    return {
-      ...f,
-      model: clean,
-      title: swap(f.title),
-      explanation: swap(f.explanation),
-      evidence: f.evidence.map((e) => ({ ...e, display: swap(e.display) })),
-    };
+    let out = f;
+    for (const key of ["model", "requestedModel"] as const) {
+      const raw = out[key];
+      if (!raw) continue;
+      const clean = scrubModel(raw);
+      if (clean === raw) continue;
+      const swap = (s: string) => s.split(raw).join(clean);
+      out = {
+        ...out,
+        [key]: clean,
+        title: swap(out.title),
+        explanation: swap(out.explanation),
+        evidence: out.evidence.map((e) => ({ ...e, display: swap(e.display) })),
+      };
+    }
+    return out;
   });
   return {
     tool: "nerf-watch",

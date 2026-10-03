@@ -26,6 +26,7 @@ That reads every Claude Code and Codex session on the machine, prints what chang
 npx nerf-watch scan                          # baselines per CLI version and model
 npx nerf-watch check --since 30d --agent claude
 npx nerf-watch report --out nerf-watch-report.md   # anonymized, shareable
+npx nerf-watch share                         # contribute findings to the public regression watch
 ```
 
 ## Example
@@ -122,6 +123,24 @@ Details per agent:
 - Local only. nerf-watch reads files under your home directory and prints to your terminal. It makes no network requests and has no telemetry.
 - `nerf-watch report` writes aggregate numbers only: token medians, rates, CLI versions, model ids, dates and counts. It contains no prompts, responses, tool output, file paths, project names or session ids. Model ids that look like account-specific deployments (ARNs, URLs, long numeric ids) are replaced with a hash. The test suite plants sentinel strings in synthetic logs and fails if any of them reach a report.
 - Read the report before you share it. It is plain markdown or JSON.
+- `nerf-watch share` builds an even smaller payload (see below), prints it in full, and only then prints a link. Opening that link and pressing submit is the only way anything leaves your machine.
+
+## Sharing with the regression watch
+
+The [open agent lab regression watch](https://abelo9996.github.io/open-agent-lab/regressions/) collects anonymized findings from many users, so a change that hits many people shows up as many matching reports. To contribute yours:
+
+```sh
+npx nerf-watch share          # print what would be shared and a prefilled issue link
+npx nerf-watch share --open   # same, and open the link in your browser
+```
+
+`share` (also available as `report --share`) runs the detectors, keeps the warnings and alerts, and builds a JSON payload from structured fields only: detector id, signal, severity, agent, model ids, the CLI versions before and after, dates, sample counts and the before and after values. Finding titles and explanations are not included. Then it:
+
+1. Replaces any model id or CLI version that does not look like a public one (paths, ARNs, URLs, anything containing your user name, home directory or host name) with `custom-model` or `custom-version`. These are fixed words, not hashes, so they cannot be reversed.
+2. Scans every value in the finished payload again for file paths, email addresses, URLs, session ids, long hex or numeric ids, and your user, home directory and host names. If anything matches, it prints nothing and exits with status 2.
+3. Prints the payload exactly as it will appear in the issue, and a link to a new [regression report](https://github.com/Abelo9996/open-agent-lab/issues/new?template=regression-report.yml) on open-agent-lab with the agent, versions, model and JSON already filled in. If the JSON is too long for a link, the link opens the form with the other fields filled in and you paste the JSON from the terminal.
+
+nerf-watch makes no network request in any of this. `--open` launches your browser on the link; without it, nothing happens until you open the link yourself. The issue is public, so read it before you submit. A scheduled job on open-agent-lab validates each report and aggregates the findings per agent, CLI version, model and signal on the site.
 
 ## Supported agents
 
@@ -138,10 +157,11 @@ Paths resolve the same way on macOS, Linux and Windows (`%USERPROFILE%\.claude`,
 nerf-watch scan    [--since WHEN] [--agent ID] [--root AGENT=DIR] [--json]
 nerf-watch check   [--since WHEN] [--agent ID] [--root AGENT=DIR] [--json]
                    [--fail-on alert|warn|never] [--recent-days 7] [--baseline-days 28]
-nerf-watch report  [--since WHEN] [--agent ID] [--root AGENT=DIR] [--json] [--out FILE.md|FILE.json]
+nerf-watch report  [--since WHEN] [--agent ID] [--root AGENT=DIR] [--json] [--out FILE.md|FILE.json] [--share [--open]]
+nerf-watch share   [--since WHEN] [--agent ID] [--root AGENT=DIR] [--json] [--open]
 ```
 
-`WHEN` is a date (`2026-09-01`) or a span (`12h`, `7d`, `4w`). Exit codes: 0 ok, 1 findings at or above `--fail-on`, 2 usage error.
+`WHEN` is a date (`2026-09-01`) or a span (`12h`, `7d`, `4w`). Exit codes: 0 ok, 1 findings at or above `--fail-on`, 2 usage error or a share payload that failed the privacy scan.
 
 ## Agent skill
 
@@ -155,7 +175,7 @@ npx skills add Abelo9996/nerf-watch
 
 - More adapters: OpenCode, Gemini CLI, DeepSeek Harness, pi. Each one is a single file; see [CONTRIBUTING.md](CONTRIBUTING.md).
 - Served-model detection for Codex as its logs start recording it.
-- A public, opt-in regression board where people can submit anonymized reports, so a change that hits many users shows up within hours. It will be part of an open agent evaluation lab together with the sibling projects below.
+- A public, opt-in regression board: started as the [regression watch](https://abelo9996.github.io/open-agent-lab/regressions/), fed by `nerf-watch share`.
 
 ## Related projects
 

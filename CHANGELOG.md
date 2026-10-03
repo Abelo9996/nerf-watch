@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `nerf-watch share` (also `report --share`): builds a small anonymized payload of warning and alert findings (detector, signal, severity, agent, model ids, CLI versions, dates, sample counts, before and after values; no free text), scans every value for paths, emails, URLs, session ids, long ids and the local user, home directory and host names, prints it, and prints a prefilled regression-report issue link on open-agent-lab. `--open` opens the link in the browser. Falls back to the form without the JSON when the link would be too long. No network requests.
+- Model-mismatch findings carry `requestedModel`; `report` scrubs it like `model`.
+
 ### Changed
 
 - Renamed the project from `nerfwatch` to `nerf-watch`. The package name, the command (`nerf-watch`), the repository URL (github.com/Abelo9996/nerf-watch), the skill directory (`skills/nerf-watch/`) and the default report file name (`nerf-watch-report.md`) all use the new name. GitHub redirects the old repository URL. Install with `npx github:Abelo9996/nerf-watch check`.
@@ -15,6 +20,7 @@ All notable changes to this project are documented here. The format follows
 - Version windows widen to up to six versions when three hold too little data. Findings whose after side pools several versions name the range.
 - Context window comparisons need at least 20 reports per side.
 - `scan` shows the share of subagent turns per row.
+- `check` points to `nerf-watch share` when it finds warnings or alerts.
 
 ### Fixed
 
