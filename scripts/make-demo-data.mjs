@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Synthetic session logs that mimic the Claude Code and Codex JSONL schemas.
 // Used by the test suite and to produce the example output in the README.
 // Nothing here comes from real logs: every value is generated.
