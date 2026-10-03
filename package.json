@@ -1,0 +1,60 @@
+{
+  "name": "nerfwatch",
+  "version": "0.1.0",
+  "description": "Find out when your coding agent quietly got worse or more expensive. Reads local Claude Code and Codex session logs and flags changes you did not make.",
+  "type": "module",
+  "bin": {
+    "nerfwatch": "dist/cli.js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "skills",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsup",
+    "prepare": "tsup",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "demo-data": "node scripts/make-demo-data.mjs"
+  },
+  "keywords": [
+    "claude-code",
+    "codex",
+    "coding-agent",
+    "regression",
+    "monitoring",
+    "llm",
+    "cli"
+  ],
+  "author": "Abel Yagubyan",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Abelo9996/nerfwatch.git"
+  },
+  "homepage": "https://github.com/Abelo9996/nerfwatch#readme",
+  "bugs": "https://github.com/Abelo9996/nerfwatch/issues",
+  "dependencies": {
+    "cac": "^6.7.14"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  }
+}

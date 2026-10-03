@@ -1,0 +1,128 @@
+#!/usr/bin/env node
+import { writeFileSync } from "node:fs";
+import { extname } from "node:path";
+import { cac } from "cac";
+import { adapters } from "./adapters/index.js";
+import { runDetectors } from "./detectors.js";
+import { bold, countBySeverity, datasetSummary, dim, formatFinding, SEGMENT_ALIGN, SEGMENT_HEADERS, segmentRows, table } from "./format.js";
+import { loadDataset } from "./load.js";
+import { buildSegments } from "./metrics.js";
+import { buildReport, reportToMarkdown, toolVersion } from "./report.js";
+import type { Severity } from "./types.js";
+import { parseAgents, parseRoots, parseSince, UsageError } from "./options.js";
+
+interface Common {
+  since?: string;
+  agent?: string | string[];
+  root?: string | string[];
+  json?: boolean;
+}
+
+async function load(o: Common) {
+  return loadDataset({ since: parseSince(o.since), agents: parseAgents(o.agent), roots: parseRoots(o.root) });
+}
+
+function noData(json: boolean | undefined): void {
+  const msg =
+    "No Claude Code or Codex session logs found. Looked in ~/.claude/projects, ~/.config/claude/projects and ~/.codex/sessions " +
+    "(override with CLAUDE_CONFIG_DIR, CODEX_HOME or --root agent=dir).";
+  if (json) console.log(JSON.stringify({ error: "no-data", message: msg }));
+  else console.log(msg);
+}
+
+export function buildCli() {
+  const cli = cac("nerfwatch");
+
+  const common = (cmd: ReturnType<typeof cli.command>) =>
+    cmd
+      .option("--since <when>", "Only use records since a date (YYYY-MM-DD) or span (7d, 2w, 12h)")
+      .option("--agent <id>", `Only read one agent: ${adapters.map((a) => a.id).join(" | ")} (repeatable)`)
+      .option("--root <agent=dir>", "Read an agent's logs from a custom directory (repeatable)")
+      .option("--json", "Machine-readable JSON output");
+
+  common(cli.command("scan", "Parse all sessions and print per-(agent, CLI version, model) baselines")).action(async (o: Common) => {
+    const ds = await load(o);
+    const segs = buildSegments(ds);
+    if (o.json) {
+      console.log(JSON.stringify({ summary: { files: ds.files, turns: ds.turns.length, toolCalls: ds.toolResults.length, badLines: ds.badLines }, segments: segs }, null, 2));
+      return;
+    }
+    if (!ds.turns.length) return noData(false);
+    console.log(dim(datasetSummary(ds)));
+    console.log("");
+    console.log(table(SEGMENT_HEADERS, segmentRows(segs), SEGMENT_ALIGN));
+    console.log("");
+    console.log(dim("Medians are per API response. Cache hit = cached prompt tokens / all prompt tokens. Run `nerfwatch check` to compare them."));
+  });
+
+  common(cli.command("check", "Detect changes you did not make. Exits 1 when alerts are found"))
+    .option("--fail-on <level>", "Exit non-zero at this severity: alert | warn | never", { default: "alert" })
+    .option("--recent-days <n>", "Recent window for same-version drift checks", { default: 7 })
+    .option("--baseline-days <n>", "Baseline window before the recent window", { default: 28 })
+    .action(async (o: Common & { failOn: string; recentDays: number; baselineDays: number }) => {
+      if (!["alert", "warn", "never"].includes(o.failOn)) throw new UsageError(`--fail-on must be alert, warn or never`);
+      const ds = await load(o);
+      if (!ds.turns.length) return noData(o.json);
+      const findings = runDetectors(ds, { recentDays: Number(o.recentDays), baselineDays: Number(o.baselineDays) });
+      const counts = countBySeverity(findings);
+      if (o.json) {
+        console.log(JSON.stringify({ summary: counts, findings }, null, 2));
+      } else {
+        console.log(dim(datasetSummary(ds)));
+        console.log("");
+        if (!findings.length) console.log("No changes crossed a threshold.");
+        for (const f of findings) {
+          console.log(formatFinding(f));
+          console.log("");
+        }
+        console.log(bold(`${counts.alert} alert(s), ${counts.warn} warning(s), ${counts.info} info`));
+        if (findings.length) console.log(dim("Share an anonymized copy with: nerfwatch report --out nerfwatch-report.md"));
+      }
+      const failAt: Severity[] = o.failOn === "warn" ? ["alert", "warn"] : o.failOn === "alert" ? ["alert"] : [];
+      if (findings.some((f) => failAt.includes(f.severity))) process.exitCode = 1;
+    });
+
+  common(cli.command("report", "Write an anonymized, shareable report (no prompts, paths or project names)"))
+    .option("--out <file>", "Output file; .md or .json picks the format", { default: "nerfwatch-report.md" })
+    .action(async (o: Common & { out: string }) => {
+      const ds = await load(o);
+      if (!ds.turns.length) return noData(o.json);
+      const r = buildReport(ds, runDetectors(ds));
+      if (o.json) {
+        console.log(JSON.stringify(r, null, 2));
+        return;
+      }
+      const ext = extname(o.out).toLowerCase();
+      if (ext !== ".md" && ext !== ".json") throw new UsageError(`--out must end in .md or .json`);
+      writeFileSync(o.out, ext === ".json" ? JSON.stringify(r, null, 2) + "\n" : reportToMarkdown(r));
+      console.log(`Wrote ${o.out} (${r.findings.length} finding(s)). Review it before sharing; it contains only aggregate numbers, versions, model ids and dates.`);
+    });
+
+  cli.help();
+  cli.version(toolVersion());
+  return cli;
+}
+
+async function main() {
+  const cli = buildCli();
+  try {
+    cli.parse(process.argv, { run: false });
+    if (!cli.matchedCommand) {
+      if (cli.options.help || cli.options.version) return;
+      if (cli.args.length) throw new UsageError(`Unknown command "${cli.args[0]}". Try: nerfwatch --help`);
+      cli.outputHelp();
+      return;
+    }
+    await cli.runMatchedCommand();
+  } catch (e) {
+    if (e instanceof UsageError || (e instanceof Error && e.name === "CACError")) {
+      console.error(`nerfwatch: ${e.message}`);
+      process.exitCode = 2;
+      return;
+    }
+    console.error(e instanceof Error ? (e.stack ?? e.message) : e);
+    process.exitCode = 3;
+  }
+}
+
+main();
