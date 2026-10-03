@@ -1,0 +1,55 @@
+name: macos-app
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/macos/**"
+      - ".github/workflows/macos.yml"
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - "apps/macos/**"
+      - ".github/workflows/macos.yml"
+
+jobs:
+  build:
+    name: build and test
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: apps/macos
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift --version
+      - name: Unit tests
+        run: ./test.sh
+      - name: Build NerfWatch-macOS.zip
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then export VERSION="${GITHUB_REF_NAME#v}"; fi
+          BUILD_NUMBER="$GITHUB_RUN_NUMBER" ./build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NerfWatch-macOS
+          path: apps/macos/build/NerfWatch-macOS.zip
+          if-no-files-found: error
+
+  release:
+    name: attach to release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: NerfWatch-macOS
+      - name: Upload NerfWatch-macOS.zip to the release for this tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes
+          gh release upload "$TAG" NerfWatch-macOS.zip --clobber

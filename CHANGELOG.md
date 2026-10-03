@@ -8,6 +8,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- macOS menu bar app (`apps/macos/`, macOS 13+, SwiftUI, no dependencies). Runs `nerf-watch check --json` on a schedule and on demand and shows a green, yellow, red or grey status icon with a distinct shape per state, a findings list with a details view of the evidence, Copy anonymized report, launch at login, and a notification when a new alert appears. It only runs the local CLI. `apps/macos/build.sh` builds an unsigned universal `NerfWatch-macOS.zip`; a workflow builds and tests it and attaches the zip to the GitHub release on tag push.
 - `nerf-watch share` (also `report --share`): builds a small anonymized payload of warning and alert findings (detector, signal, severity, agent, model ids, CLI versions, dates, sample counts, before and after values; no free text), scans every value for paths, emails, URLs, session ids, long ids and the local user, home directory and host names, prints it, and prints a prefilled regression-report issue link on open-agent-lab. `--open` opens the link in the browser. Falls back to the form without the JSON when the link would be too long. No network requests.
 - Model-mismatch findings carry `requestedModel`; `report` scrubs it like `model`.
 

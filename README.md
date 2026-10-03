@@ -74,6 +74,46 @@ node scripts/make-demo-data.mjs /tmp/nw-demo
 nerf-watch check --root claude=/tmp/nw-demo/claude/projects --root codex=/tmp/nw-demo/codex/sessions
 ```
 
+## Menu bar app (macOS)
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/menubar-dark.png">
+  <img alt="Nerf Watch menu bar app on synthetic logs: a red status icon with the count 5, the open menu listing 2 alerts and 3 warnings with agent, model and CLI version range, and the details of the cache-creation alert with before and after values" src="docs/menubar-light.png">
+</picture>
+
+A small status light for the menu bar. It runs `nerf-watch check --json` every 30 minutes (configurable) and on demand, and shows:
+
+| Icon | Meaning |
+|---|---|
+| green check | no warnings or alerts |
+| yellow triangle | warnings |
+| red octagon | alerts |
+| grey dashed circle | not checked yet, no logs found, or the check failed |
+
+Each state has its own shape, and the menu, tooltip and VoiceOver label say it in words. The menu lists every finding (severity, agent, model, title, CLI version range); click one for the before and after numbers. It also has Check now, Copy anonymized report (`report --json` to the clipboard), Settings (interval, CLI path, log folders, launch at login) and Quit. When an alert appears that was not there on the previous run, you get a macOS notification.
+
+Install:
+
+1. Download `NerfWatch-macOS.zip` from the [latest release](https://github.com/Abelo9996/nerf-watch/releases/latest), unzip it and move `Nerf Watch.app` to Applications. It needs macOS 13 or newer and Node.js 20 or newer.
+2. The app is not signed or notarized. The first time, right-click (or Control-click) `Nerf Watch.app`, choose Open, then Open again. On macOS 15 and later, if there is no Open button, go to System Settings > Privacy & Security and click Open Anyway.
+
+The app uses `nerf-watch` from your PATH if it is installed, else `npx -y nerf-watch@latest`; set a different CLI (an executable or a `cli.js` file) in Settings. If Node.js is missing it says so and links to the installer. The app itself makes no network requests; it only runs the CLI and keeps a small state file of alert keys in `~/Library/Application Support/NerfWatch/`.
+
+Build and test from source (Swift 6, Xcode 16 or the Command Line Tools, no dependencies):
+
+```sh
+apps/macos/test.sh     # unit tests
+apps/macos/build.sh    # apps/macos/build/NerfWatch-macOS.zip
+```
+
+To try it on the synthetic logs, start it with `NERF_WATCH_ROOTS` (and optionally `NERF_WATCH_CLI`):
+
+```sh
+node scripts/make-demo-data.mjs /tmp/nw-demo
+NERF_WATCH_ROOTS="claude=/tmp/nw-demo/claude/projects,codex=/tmp/nw-demo/codex/sessions" \
+  "apps/macos/build/Nerf Watch.app/Contents/MacOS/NerfWatch"
+```
+
 ## What it detects
 
 | Check | Finding id | Compares | Warn | Alert |
