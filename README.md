@@ -2,6 +2,8 @@
 
 [![ci](https://github.com/Abelo9996/nerf-watch/actions/workflows/ci.yml/badge.svg)](https://github.com/Abelo9996/nerf-watch/actions/workflows/ci.yml) [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+![nerf-watch check run on synthetic Claude Code logs, flagging a silent model swap from claude-opus-5 to claude-sonnet-5, a cache-write jump and a cache hit rate collapse after a CLI update](docs/demo.gif)
+
 Find out when your coding agent quietly got worse or more expensive.
 
 nerf-watch reads the session logs that Claude Code and Codex already write on your machine and flags changes you did not make: a different model answered than the one you picked, reasoning effort dropped, the context window shrank, cache writes per turn jumped after a CLI update, the cache hit rate collapsed, or tool calls started failing more often. Everything runs locally. Nothing is uploaded.
