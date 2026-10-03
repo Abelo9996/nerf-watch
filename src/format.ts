@@ -38,6 +38,7 @@ export function segmentRows(segs: Segment[]): string[][] {
     s.cliVersion,
     s.model,
     fmtInt(s.turns),
+    s.subagentTurns ? fmtPct(s.subagentTurns / s.turns) : "-",
     fmtInt(s.sessions),
     `${isoDate(s.firstSeen)}..${isoDate(s.lastSeen).slice(5)}`,
     fmtTokens(s.medianPromptTokens),
@@ -55,6 +56,7 @@ export const SEGMENT_HEADERS = [
   "cli",
   "model",
   "turns",
+  "subagent",
   "sessions",
   "seen",
   "prompt/turn",
@@ -65,7 +67,7 @@ export const SEGMENT_HEADERS = [
   "effort",
   "context",
 ];
-export const SEGMENT_ALIGN: ("l" | "r")[] = ["l", "l", "l", "r", "r", "l", "r", "r", "r", "r", "r", "l", "r"];
+export const SEGMENT_ALIGN: ("l" | "r")[] = ["l", "l", "l", "r", "r", "r", "l", "r", "r", "r", "r", "r", "l", "r"];
 
 export function datasetSummary(ds: Dataset): string {
   const agents = Object.keys(ds.files).filter((a) => ds.files[a] > 0);

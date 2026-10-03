@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import type { Adapter, AgentEvent, DiscoverOptions, ParsedFile, ToolResult, Turn } from "../types.js";
-import { findFiles, num, readJsonl, sessionKeyFor, splitPathList, toMs } from "./util.js";
+import { findFiles, num, readJsonl, sessionKeyFor, splitPathList, toMs, workloadKeyFor } from "./util.js";
 
 /**
  * Codex writes "rollout" files under <CODEX_HOME>/sessions/YYYY/MM/DD/*.jsonl
@@ -8,7 +8,8 @@ import { findFiles, num, readJsonl, sessionKeyFor, splitPathList, toMs } from ".
  * envelope { timestamp, type, payload }.
  *
  * Record shapes used:
- * - session_meta: payload.cli_version, payload.source (object with "subagent" for spawned threads)
+ * - session_meta: payload.cli_version, payload.source (object with "subagent" for spawned threads),
+ *   payload.cwd and payload.source (cli, vscode, exec, ...) form the workload key; cwd is hashed.
  * - turn_context: payload.model (requested), payload.effort
  * - event_msg/task_started: payload.model_context_window
  * - event_msg/token_count: payload.info.last_token_usage { input_tokens (includes cached),
@@ -49,6 +50,7 @@ export const codexAdapter: Adapter = {
     let effort: string | undefined;
     let ctxWindow: number | undefined;
     let sidechain = false;
+    let workloadKey: string | undefined;
     let lastTotal = -1;
     let sawFirst = false;
 
@@ -67,6 +69,7 @@ export const codexAdapter: Adapter = {
       if (o.type === "session_meta") {
         if (typeof p.cli_version === "string") version = p.cli_version;
         if (p.source && typeof p.source === "object" && "subagent" in p.source) sidechain = true;
+        if (typeof p.cwd === "string") workloadKey = workloadKeyFor("codex", p.cwd, typeof p.source === "string" ? p.source : "subagent");
         continue;
       }
       if (o.type === "turn_context") {
@@ -92,6 +95,7 @@ export const codexAdapter: Adapter = {
           lastTotal = total;
           if (num(info.model_context_window) > 0) ctxWindow = info.model_context_window;
           const cached = num(last.cached_input_tokens);
+          if (num(last.input_tokens) + num(last.output_tokens) === 0) break;
           const t: Turn = {
             agent: "codex",
             sessionKey,
@@ -110,6 +114,7 @@ export const codexAdapter: Adapter = {
               reasoning: num(last.reasoning_output_tokens),
             },
             sidechain,
+            workloadKey,
           };
           if (!sidechain && !sawFirst) {
             t.firstInSession = true;
@@ -137,7 +142,7 @@ export const codexAdapter: Adapter = {
     }
 
     function tool(ts: number, isError: boolean): ToolResult {
-      return { agent: "codex", sessionKey, timestamp: ts, cliVersion: version, model: served ?? requested, isError };
+      return { agent: "codex", sessionKey, timestamp: ts, cliVersion: version, model: served ?? requested, isError, workloadKey, sidechain };
     }
 
     return { turns, toolResults, events, badLines };

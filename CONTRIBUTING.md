@@ -40,8 +40,8 @@ Steps:
 1. **Learn the format from your own logs, locally.** Print keys and value types, not content. For JSONL, something like
    `jq -c '[.type, (keys|join(","))]' some-session.jsonl | sort | uniq -c` shows record shapes without exposing text.
 2. **Write `src/adapters/<agent>.ts`.** Use `findFiles` and `readJsonl` from `./util.js`. Pass a cheap string filter to `readJsonl` so large records you do not need are never JSON-parsed. Emit:
-   - one `Turn` per model API response, with `usage` normalized so that `input` excludes cached tokens, plus `cliVersion`, `requestedModel` and `servedModel` when the log has them, `effort`, `contextWindow`, `firstInSession` on the first main-thread response, `sidechain` for subagent traffic, and a `dedupeKey` if the same response can appear in more than one file;
-   - one `ToolResult` per tool call outcome;
+   - one `Turn` per model API response, with `usage` normalized so that `input` excludes cached tokens, plus `cliVersion`, `requestedModel` and `servedModel` when the log has them, `effort`, `contextWindow`, `firstInSession` on the first main-thread response, `sidechain` for subagent traffic, a `workloadKey` (use `workloadKeyFor` with the project directory and client so the key is a hash), `effortSetByUser` when the log shows the user changed effort, and a `dedupeKey` if the same response can appear in more than one file;
+   - one `ToolResult` per tool call outcome, with the same `workloadKey` and `sidechain`;
    - `AgentEvent`s for fallbacks, compactions and API errors if the agent records them.
 3. **Document the record shapes you rely on** in a comment at the top of the file, the way `claude.ts` and `codex.ts` do. Formats change; this is how the next person finds what broke.
 4. **Register it** in `src/adapters/index.ts`.
@@ -52,7 +52,7 @@ Detectors work on the canonical records, so a new adapter gets every check for f
 
 ## Changing a detector or threshold
 
-Thresholds live in `src/detectors.ts` (`RULES`) and minimum sample sizes in `src/metrics.ts` (`MIN`). Include a test with a positive case and a quiet case. If the change is motivated by real-world noise, describe the pattern in the PR (numbers only).
+Thresholds live in `src/detectors.ts` (`RULES`) and minimum sample sizes in `src/metrics.ts` (`MIN`, and `MIN_STRATUM` for one workload). Include a test with a positive case and a quiet case. If the change is motivated by real-world noise, describe the pattern in the PR (numbers only) and add a synthetic reproduction to `test/false-positives.test.ts`.
 
 ## Pull requests
 

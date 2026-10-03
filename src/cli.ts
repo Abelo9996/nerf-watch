@@ -52,7 +52,12 @@ export function buildCli() {
     console.log("");
     console.log(table(SEGMENT_HEADERS, segmentRows(segs), SEGMENT_ALIGN));
     console.log("");
-    console.log(dim("Medians are per API response. Cache hit = cached prompt tokens / all prompt tokens. Run `nerf-watch check` to compare them."));
+    console.log(
+      dim(
+        "Medians are per API response, including subagents. Cache hit = cached prompt tokens / all prompt tokens. " +
+          "`nerf-watch check` compares main-thread traffic only, within each project.",
+      ),
+    );
   });
 
   common(cli.command("check", "Detect changes you did not make. Exits 1 when alerts are found"))

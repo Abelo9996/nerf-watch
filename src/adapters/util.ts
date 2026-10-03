@@ -81,3 +81,8 @@ export function splitPathList(v: string | undefined, delimiter: string): string[
     .map((s) => s.trim())
     .filter(Boolean);
 }
+
+/** Opaque, non-reversible key for a workload (project directory plus client). Never printed. */
+export function workloadKeyFor(agent: string, project: string, client: string | undefined): string {
+  return agent + ":w:" + createHash("sha256").update(`${project}\u0000${client ?? ""}`).digest("hex").slice(0, 16);
+}

@@ -43,13 +43,14 @@ export const SENTINEL_CWD = "/home/demo/sentinel-secret-project";
  * @param {number} [o.firstPrompt] cache-creation tokens on the first turn
  * @param {string} [o.effort]
  * @param {number} [o.toolErrorRate]
+ * @param {string} [o.entrypoint] client that wrote the session (cli, claude-desktop, ...)
  * @param {() => number} [o.r]
  */
 export function claudeSession(o) {
   const r = o.r ?? rng(1);
   const sessionId = fakeUuid("c1a0");
   const lines = [];
-  const base = { cwd: SENTINEL_CWD, sessionId, version: o.version, gitBranch: "main", userType: "external", entrypoint: "cli", isSidechain: false };
+  const base = { cwd: SENTINEL_CWD, sessionId, version: o.version, gitBranch: "main", userType: "external", entrypoint: o.entrypoint ?? "cli", isSidechain: false };
   let t = o.start;
   const ts = () => new Date((t += 20_000 + Math.floor(r() * 40_000))).toISOString();
   lines.push({ type: "permission-mode", permissionMode: "default", sessionId });
@@ -95,6 +96,7 @@ export function claudeSession(o) {
  * @param {number} [o.contextWindow]
  * @param {number} [o.toolErrorRate]
  * @param {string} [o.servedModel] if set, emits a model_reroute style event
+ * @param {string} [o.cwd] working directory recorded in session_meta
  * @param {() => number} [o.r]
  */
 export function codexSession(o) {
@@ -104,7 +106,7 @@ export function codexSession(o) {
   let t = o.start;
   const ts = () => new Date((t += 15_000 + Math.floor(r() * 30_000))).toISOString();
   const ctx = o.contextWindow ?? 258400;
-  lines.push({ timestamp: ts(), type: "session_meta", payload: { id, timestamp: new Date(o.start).toISOString(), cwd: SENTINEL_CWD, originator: "codex-tui", cli_version: o.version, source: "cli", model_provider: "openai", base_instructions: { text: SENTINEL_PROMPT } } });
+  lines.push({ timestamp: ts(), type: "session_meta", payload: { id, timestamp: new Date(o.start).toISOString(), cwd: o.cwd ?? SENTINEL_CWD, originator: "codex-tui", cli_version: o.version, source: "cli", model_provider: "openai", base_instructions: { text: SENTINEL_PROMPT } } });
   const turnId = fakeUuid("7777");
   lines.push({ timestamp: ts(), type: "event_msg", payload: { type: "task_started", turn_id: turnId, model_context_window: ctx } });
   lines.push({ timestamp: ts(), type: "turn_context", payload: { turn_id: turnId, cwd: SENTINEL_CWD, model: o.model, effort: o.effort ?? "medium", summary: "auto", approval_policy: "on-request" } });
@@ -143,7 +145,9 @@ export function toJsonl(lines) {
 }
 
 /**
- * Write a demo scenario with known regressions:
+ * Write a demo scenario with known regressions. Sessions are spread over
+ * several projects, because token regressions only count when they show up in
+ * more than one project:
  * - Claude Code 2.1.270 -> 2.1.271 stable, then 2.1.272: cache writes per turn x3 and cache hit rate drops.
  * - A few Claude sessions configured for claude-opus-5 are answered by claude-sonnet-5.
  * - Codex 0.140.0 -> 0.141.0: default effort drops from high to medium.
@@ -152,9 +156,9 @@ export function toJsonl(lines) {
 export function writeDemo(dir, end = Date.UTC(2026, 9, 2, 18)) {
   uuidCounter = 0;
   const r = rng(7);
-  const claudeDir = join(dir, "claude", "projects", "-home-demo-project");
+  const claudeDirs = ["-home-demo-project", "-home-demo-project-api", "-home-demo-project-web"].map((p) => join(dir, "claude", "projects", p));
   const codexRoot = join(dir, "codex", "sessions");
-  mkdirSync(claudeDir, { recursive: true });
+  for (const d of claudeDirs) mkdirSync(d, { recursive: true });
   const day = (n) => end - n * DAY;
 
   const claudePlan = [
@@ -167,7 +171,7 @@ export function writeDemo(dir, end = Date.UTC(2026, 9, 2, 18)) {
       const start = day(p.from - ((p.from - p.to) * i) / p.n);
       const mismatch = p.version === "2.1.272" && i % 4 === 0;
       const s = claudeSession({ version: p.version, model: mismatch ? "claude-sonnet-5" : "claude-opus-5", requested: "claude-opus-5", start, turns: 40, cacheCreation: p.cacheCreation, cacheRead: p.cacheRead, r });
-      writeFileSync(join(claudeDir, `${s.sessionId}.jsonl`), toJsonl(s.lines));
+      writeFileSync(join(claudeDirs[i % claudeDirs.length], `${s.sessionId}.jsonl`), toJsonl(s.lines));
     }
   }
 
@@ -182,7 +186,7 @@ export function writeDemo(dir, end = Date.UTC(2026, 9, 2, 18)) {
       const d = new Date(start);
       const sub = join(codexRoot, String(d.getUTCFullYear()), String(d.getUTCMonth() + 1).padStart(2, "0"), String(d.getUTCDate()).padStart(2, "0"));
       mkdirSync(sub, { recursive: true });
-      const s = codexSession({ version: p.version, model: "gpt-5.5", effort: p.effort, start, turns: 30, contextWindow: p.ctx, r });
+      const s = codexSession({ version: p.version, model: "gpt-5.5", effort: p.effort, start, turns: 30, contextWindow: p.ctx, cwd: `${SENTINEL_CWD}-${i % 2 ? "api" : "web"}`, r });
       writeFileSync(join(sub, `rollout-${d.toISOString().slice(0, 19).replace(/:/g, "-")}-${s.id}.jsonl`), toJsonl(s.lines));
     }
   }

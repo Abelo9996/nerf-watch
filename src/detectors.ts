@@ -1,12 +1,11 @@
 import {
   EFFORT_RANK,
   METRICS,
+  MIN_STRATUM,
   cohortsByVersion,
   compareVersions,
-  modalEffort,
-  modelOf,
+  defaultEffortBySession,
   normalizeModel,
-  sessionCount,
   type Cohort,
 } from "./metrics.js";
 import type { Dataset, Evidence, Finding, Severity, Turn } from "./types.js";
@@ -25,6 +24,17 @@ type Direction = "up" | "down";
 interface Rule {
   metric: keyof typeof METRICS;
   worse: Direction;
+  /**
+   * How workloads (projects) are controlled for.
+   * - "paired": per-turn metrics that depend on the work. The change must show
+   *   up inside several individual workloads that have data on both sides.
+   * - "spread": the startup prompt. It is nearly fixed per project and CLI
+   *   version, and sessions are too few to pair per project, so the pooled
+   *   median only needs sessions from several workloads on each side.
+   * - "none": discrete settings such as the context window, which do not
+   *   depend on the work.
+   */
+  stratified: "paired" | "spread" | "none";
   judge(before: number, after: number): Severity | null;
   title(agent: string, model: string, where: string): string;
   explain(before: string, after: string): string;
@@ -39,6 +49,7 @@ const ratioUp = (warn: number, alert: number, minAbs: number) => (b: number, a: 
 export const RULES: Rule[] = [
   {
     metric: "newInput",
+    stratified: "paired",
     worse: "up",
     judge: ratioUp(1.5, 2.0, 500),
     title: (_a, _m, where) => `Uncached input per turn jumped ${where}`,
@@ -49,6 +60,7 @@ export const RULES: Rule[] = [
   },
   {
     metric: "cacheCreation",
+    stratified: "paired",
     worse: "up",
     judge: ratioUp(1.5, 2.0, 500),
     title: (_a, _m, where) => `Cache-creation tokens per turn jumped ${where}`,
@@ -58,6 +70,7 @@ export const RULES: Rule[] = [
   },
   {
     metric: "firstTurnPrompt",
+    stratified: "spread",
     worse: "up",
     judge: ratioUp(1.3, 1.75, 2000),
     title: (_a, _m, where) => `Session startup prompt grew ${where}`,
@@ -67,6 +80,7 @@ export const RULES: Rule[] = [
   },
   {
     metric: "cacheHitRate",
+    stratified: "paired",
     worse: "down",
     judge: (b, a) => (b - a >= 0.3 ? "alert" : b - a >= 0.15 ? "warn" : null),
     title: (_a, _m, where) => `Cache hit rate collapsed ${where}`,
@@ -76,6 +90,7 @@ export const RULES: Rule[] = [
   },
   {
     metric: "toolErrorRate",
+    stratified: "paired",
     worse: "up",
     judge: (b, a) => {
       const d = a - b;
@@ -91,6 +106,7 @@ export const RULES: Rule[] = [
   },
   {
     metric: "contextWindow",
+    stratified: "none",
     worse: "down",
     judge: (b, a) => (b <= 0 ? null : a / b <= 0.6 ? "alert" : a / b <= 0.9 ? "warn" : null),
     title: (_a, _m, where) => `Context window shrank ${where}`,
@@ -109,6 +125,87 @@ function merge(cs: Cohort[]): Cohort {
     tools: cs.flatMap((c) => c.tools),
     compactions: cs.flatMap((c) => c.compactions),
   };
+}
+
+/** Minimum number of workloads with enough data on both sides of a stratified comparison. */
+export const MIN_WORKLOADS = 2;
+/** Share of those workloads that must cross the threshold on their own. */
+export const WORKLOAD_AGREEMENT = 2 / 3;
+
+function byWorkload(c: Cohort): Map<string, Cohort> {
+  const out = new Map<string, Cohort>();
+  const get = (k: string | undefined) => {
+    const key = k ?? "";
+    let w = out.get(key);
+    if (!w) out.set(key, (w = { turns: [], tools: [], compactions: [] }));
+    return w;
+  };
+  for (const t of c.turns) get(t.workloadKey).turns.push(t);
+  for (const t of c.tools) get(t.workloadKey).tools.push(t);
+  // Compaction events carry no workload; they only feed the unstratified context window rule.
+  return out;
+}
+
+interface Comparison {
+  severity: Severity;
+  before: { value: number; samples: number };
+  after: { value: number; samples: number };
+  /** For stratified rules: workloads compared, and how many crossed the threshold. */
+  workloads?: { paired: number; agreeing: number };
+}
+
+const SEV_RANK: Record<Severity, number> = { info: 0, warn: 1, alert: 2 };
+
+/**
+ * Compare two cohorts under one rule. The pooled values must cross the
+ * threshold. For stratified rules the change must also hold inside individual
+ * workloads: at least MIN_WORKLOADS workloads with enough data on both sides,
+ * and at least WORKLOAD_AGREEMENT of them crossing the threshold on their own.
+ * That separates "the agent changed" (every project moves) from "the work
+ * changed" (one project, or a different mix of projects, moves the pooled
+ * median). Records without a workload key (adapters that cannot provide one)
+ * are compared pooled only.
+ */
+export function compareCohorts(rule: Rule, before: Cohort, after: Cohort): Comparison | null {
+  const m = METRICS[rule.metric];
+  const b = m.compute(before);
+  const a = m.compute(after);
+  if (!b || !a) return null;
+  const pooled = rule.judge(b.value, a.value);
+  if (!pooled) return null;
+  if (rule.stratified === "none") return { severity: pooled, before: b, after: a };
+  const bw = byWorkload(before);
+  const aw = byWorkload(after);
+  if (rule.stratified === "spread") {
+    const spread = (c: Cohort) => new Set(c.turns.filter((t) => t.firstInSession && !t.sidechain).map((t) => t.workloadKey ?? "")).size;
+    const keyed = (c: Cohort) => c.turns.some((t) => t.workloadKey);
+    if ((keyed(before) && spread(before) < MIN_WORKLOADS) || (keyed(after) && spread(after) < MIN_WORKLOADS)) return null;
+    return { severity: pooled, before: b, after: a };
+  }
+  const keys = [...bw.keys()].filter((k) => aw.has(k));
+  if (keys.length === 1 && keys[0] === "" && bw.size === 1 && aw.size === 1) return { severity: pooled, before: b, after: a };
+  let paired = 0;
+  let warn = 0;
+  let alert = 0;
+  for (const k of keys) {
+    if (k === "") continue;
+    const sb = m.compute(bw.get(k)!, MIN_STRATUM);
+    const sa = m.compute(aw.get(k)!, MIN_STRATUM);
+    if (!sb || !sa) continue;
+    paired++;
+    const sev = rule.judge(sb.value, sa.value);
+    if (sev) warn++;
+    if (sev === "alert") alert++;
+  }
+  if (paired < MIN_WORKLOADS || warn < MIN_WORKLOADS || warn < paired * WORKLOAD_AGREEMENT) return null;
+  const strata: Severity = alert >= MIN_WORKLOADS && alert >= paired * WORKLOAD_AGREEMENT ? "alert" : "warn";
+  const severity = SEV_RANK[strata] < SEV_RANK[pooled] ? strata : pooled;
+  return { severity, before: b, after: a, workloads: { paired, agreeing: warn } };
+}
+
+function workloadNote(c: Comparison): string {
+  if (!c.workloads) return "";
+  return ` The change shows up in ${c.workloads.agreeing} of ${c.workloads.paired} separate workloads (projects) that have enough data on both sides, so it is not explained by a change in what you worked on.`;
 }
 
 function span(c: Cohort): { from: string; to: string } {
@@ -144,11 +241,14 @@ function versionSeries(ds: Dataset) {
 }
 
 const WINDOW_VERSIONS = 3;
+/** CLI versions ship often, so sparse data may need a wider window to reach the minimums. */
+const MAX_WINDOW_VERSIONS = 6;
 
 /**
  * Change-point scan across CLI versions. For each version V, the versions
- * just before V (up to three, pooled) are compared with V plus up to two
- * following versions (pooled until there is enough data). When a rule trips,
+ * just before V (three, or up to six when three hold too little data, pooled)
+ * are compared with V plus up to five following versions (pooled until there
+ * is enough data). When a rule trips,
  * the scan jumps past the "after" window and starts a fresh baseline there, so
  * one regression is reported once, at the version where it began.
  */
@@ -161,33 +261,36 @@ export function detectVersionShifts(ds: Dataset): Finding[] {
       const s = g.series;
       let baseStart = 0;
       for (let i = 1; i < s.length; i++) {
-        const baseline = s.slice(Math.max(baseStart, i - WINDOW_VERSIONS), i);
+        // Baseline: the three versions before i, reaching further back (up to
+        // MAX_WINDOW_VERSIONS) when they do not hold enough data on their own.
+        let k = Math.max(baseStart, i - WINDOW_VERSIONS);
+        while (k > Math.max(baseStart, i - MAX_WINDOW_VERSIONS) && !m.compute(merge(s.slice(k, i)))) k--;
+        const baseline = s.slice(k, i);
         if (!baseline.length) continue;
-        const before = m.compute(merge(baseline));
-        if (!before) continue;
+        const pooledBefore = merge(baseline);
+        if (!m.compute(pooledBefore)) continue;
         let after: { value: number; samples: number } | null = null;
         let j = i;
-        for (; j < Math.min(s.length, i + WINDOW_VERSIONS); j++) {
+        for (; j < Math.min(s.length, i + MAX_WINDOW_VERSIONS); j++) {
           after = m.compute(merge(s.slice(i, j + 1)));
           if (after) break;
         }
         if (!after) continue;
-        const sev = rule.judge(before.value, after.value);
-        if (!sev) continue;
         const afterSet = s.slice(i, j + 1);
-        const pooledBefore = merge(baseline);
         const pooledAfter = merge(afterSet);
+        const cmp = compareCohorts(rule, pooledBefore, pooledAfter);
+        if (!cmp) continue;
         out.push({
           id: `${rule.metric}-shift`,
-          severity: sev,
+          severity: cmp.severity,
           agent: g.agent,
           model: g.model,
           trigger: "version",
-          title: rule.title(g.agent, g.model, `after CLI ${s[i].version}`),
-          explanation: rule.explain(m.format(before.value), m.format(after.value)),
+          title: rule.title(g.agent, g.model, afterSet.length > 1 ? `between CLI ${s[i].version} and ${afterSet[afterSet.length - 1].version}` : `after CLI ${s[i].version}`),
+          explanation: rule.explain(m.format(cmp.before.value), m.format(cmp.after.value)) + workloadNote(cmp),
           evidence: [
-            { label: "before", versions: baseline.map((b) => b.version), ...span(pooledBefore), samples: before.samples, value: before.value, display: m.format(before.value) },
-            { label: "after", versions: afterSet.map((b) => b.version), ...span(pooledAfter), samples: after.samples, value: after.value, display: m.format(after.value) },
+            { label: "before", versions: baseline.map((b) => b.version), ...span(pooledBefore), samples: cmp.before.samples, value: cmp.before.value, display: m.format(cmp.before.value) },
+            { label: "after", versions: afterSet.map((b) => b.version), ...span(pooledAfter), samples: cmp.after.samples, value: cmp.after.value, display: m.format(cmp.after.value) },
           ],
         });
         // The after window becomes the new baseline; the next candidate is the version after it.
@@ -248,21 +351,20 @@ export function detectTimeShifts(ds: Dataset, opts: CheckOptions = {}): Finding[
     for (const rule of RULES) {
       if (rule.metric === "firstTurnPrompt") continue; // fixed per version, so time adds nothing
       const m = METRICS[rule.metric];
-      const b = m.compute(before);
-      const a = m.compute(after);
-      if (!a || !b) continue;
-      const sev = rule.judge(b.value, a.value);
-      if (!sev) continue;
+      const cmp = compareCohorts(rule, before, after);
+      if (!cmp) continue;
+      const { before: b, after: a } = cmp;
       out.push({
         id: `${rule.metric}-drift`,
-        severity: sev,
+        severity: cmp.severity,
         agent: g.agent,
         model: g.model,
         trigger: "time",
         title: rule.title(g.agent, g.model, `in the last ${recentDays} days with no CLI change (${version})`),
         explanation:
           rule.explain(m.format(b.value), m.format(a.value)) +
-          ` The CLI version (${version}) and model are the same in both windows, so the change is on the provider side or in how you used the agent.`,
+          ` The CLI version (${version}) and model are the same in both windows, so the change is on the provider side or in how you used the agent.` +
+          workloadNote(cmp),
         evidence: [
           { label: "before", versions: [version], ...span(before), samples: b.samples, value: b.value, display: m.format(b.value) },
           { label: "after", versions: [version], ...span(after), samples: a.samples, value: a.value, display: m.format(a.value) },
@@ -273,14 +375,40 @@ export function detectTimeShifts(ds: Dataset, opts: CheckOptions = {}): Finding[
   return out;
 }
 
-/** Default reasoning effort went down across a CLI version boundary. */
+/** Minimum sessions (each counted once, by the effort it started with) per version for the effort check. */
+export const EFFORT_MIN_SESSIONS = 3;
+/** Share of those sessions that must agree on the effort level. */
+export const EFFORT_MIN_SHARE = 0.6;
+
+/**
+ * Default reasoning effort went down across a CLI version boundary. Each
+ * main-thread session counts once, by the effort it started with; turns after
+ * the user changed effort (/effort, or the /model picker) are ignored. The
+ * level must be the majority in several sessions from at least two workloads
+ * on both sides, so one session where the user picked "max" cannot make the
+ * next version look like a downgrade.
+ */
 export function detectEffortDrops(ds: Dataset): Finding[] {
   const out: Finding[] = [];
+  type Level = { version: string; effort: string; share: number; samples: number; c: Cohort };
+  const level = (cur: Cohort & { version: string }): Level | null => {
+    const sessions = defaultEffortBySession(cur.turns);
+    if (sessions.length < EFFORT_MIN_SESSIONS) return null;
+    const counts = new Map<string, number>();
+    for (const x of sessions) counts.set(x.effort, (counts.get(x.effort) ?? 0) + 1);
+    const [effort, n] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+    const share = n / sessions.length;
+    if (share < EFFORT_MIN_SHARE) return null;
+    const workloads = new Set(sessions.filter((x) => x.effort === effort).map((x) => x.workloadKey ?? ""));
+    const keyed = sessions.some((x) => x.workloadKey);
+    if (keyed && workloads.size < MIN_WORKLOADS) return null;
+    return { version: cur.version, effort, share, samples: sessions.length, c: cur };
+  };
   for (const g of versionSeries(ds)) {
-    let prev: { version: string; effort: string; share: number; samples: number; c: Cohort } | null = null;
+    let prev: Level | null = null;
     for (const cur of g.series) {
-      const e = modalEffort(cur.turns);
-      if (!e || e.samples < 30 || sessionCount(cur.turns) < 3) continue;
+      const e = level(cur);
+      if (!e) continue;
       if (prev && EFFORT_RANK[e.effort] !== undefined && EFFORT_RANK[prev.effort] !== undefined && EFFORT_RANK[e.effort] < EFFORT_RANK[prev.effort]) {
         out.push({
           id: "effort-drop",
@@ -290,15 +418,15 @@ export function detectEffortDrops(ds: Dataset): Finding[] {
           trigger: "version",
           title: `Reasoning effort dropped from ${prev.effort} to ${e.effort} after CLI ${cur.version}`,
           explanation:
-            `Most turns on ${prev.version} ran at "${prev.effort}" effort; on ${cur.version} most run at "${e.effort}". ` +
-            `If you did not change the effort setting yourself, the default changed under you. Lower effort is cheaper and faster but plans less and makes more mistakes on hard tasks.`,
+            `Most sessions on ${prev.version} started at "${prev.effort}" effort; on ${cur.version} most start at "${e.effort}". ` +
+            `Sessions where you changed the effort yourself are not counted. If you did not change the effort setting in your config either, the default changed under you. Lower effort is cheaper and faster but plans less and makes more mistakes on hard tasks.`,
           evidence: [
-            { label: "before", versions: [prev.version], ...span(prev.c), samples: prev.samples, value: EFFORT_RANK[prev.effort], display: `${prev.effort} (${Math.round(prev.share * 100)}% of turns)` },
-            { label: "after", versions: [cur.version], ...span(cur), samples: e.samples, value: EFFORT_RANK[e.effort], display: `${e.effort} (${Math.round(e.share * 100)}% of turns)` },
+            { label: "before", versions: [prev.version], ...span(prev.c), samples: prev.samples, value: EFFORT_RANK[prev.effort], display: `${prev.effort} (${Math.round(prev.share * 100)}% of sessions)` },
+            { label: "after", versions: [cur.version], ...span(cur), samples: e.samples, value: EFFORT_RANK[e.effort], display: `${e.effort} (${Math.round(e.share * 100)}% of sessions)` },
           ],
         });
       }
-      prev = { version: cur.version, ...e, c: cur };
+      prev = e;
     }
   }
   return out;

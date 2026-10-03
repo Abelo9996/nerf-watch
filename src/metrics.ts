@@ -59,11 +59,37 @@ export interface Cohort {
   compactions: Extract<AgentEvent, { kind: "compaction" }>[];
 }
 
-export const MIN = {
+export interface Minimums {
+  /** Main-thread warm turns. */
+  turns: number;
+  sessions: number;
+  /** Sessions with a first turn, for the startup prompt metric. */
+  firstTurns: number;
+  toolCalls: number;
+  compactions: number;
+  /** Turns that report a context window. */
+  contextReports: number;
+}
+
+/** Minimum data for a pooled before/after value. */
+export const MIN: Minimums = {
   turns: 50,
   sessions: 5,
+  firstTurns: 5,
   toolCalls: 100,
   compactions: 2,
+  contextReports: 20,
+};
+
+/** Minimum data for one workload's value inside a stratified comparison. */
+export const MIN_STRATUM: Minimums = {
+  turns: 20,
+  sessions: 1,
+  // The startup prompt is nearly fixed for a given project and CLI version, so one session is informative.
+  firstTurns: 1,
+  toolCalls: 30,
+  compactions: 2,
+  contextReports: 20,
 };
 
 export function sessionCount(xs: { sessionKey: string }[]): number {
@@ -73,6 +99,15 @@ export function sessionCount(xs: { sessionKey: string }[]): number {
 /** Turns after the first of each session. The first turn always pays a cold cache. */
 export function warmTurns(turns: Turn[]): Turn[] {
   return turns.filter((t) => !t.firstInSession);
+}
+
+/**
+ * Main-thread turns. Subagent turns are left out of token metrics: their size
+ * depends on which subagent ran and what it read, so a different mix of
+ * subagents looks like a change in the agent when it is a change in the work.
+ */
+export function mainTurns(turns: Turn[]): Turn[] {
+  return turns.filter((t) => !t.sidechain);
 }
 
 /**
@@ -93,7 +128,7 @@ export interface MetricDef {
   id: string;
   label: string;
   /** Returns null when the cohort is too small for a stable value. */
-  compute(c: Cohort): { value: number; samples: number } | null;
+  compute(c: Cohort, min?: Minimums): { value: number; samples: number } | null;
   format(v: number): string;
 }
 
@@ -104,9 +139,9 @@ export const METRICS: Record<string, MetricDef> = {
   newInput: {
     id: "newInput",
     label: "uncached input tokens per turn (median of session medians)",
-    compute(c) {
-      c = { ...c, turns: warmTurns(c.turns) };
-      if (c.turns.length < MIN.turns || sessionCount(c.turns) < MIN.sessions) return null;
+    compute(c, min = MIN) {
+      c = { ...c, turns: warmTurns(mainTurns(c.turns)) };
+      if (c.turns.length < min.turns || sessionCount(c.turns) < min.sessions) return null;
       return { value: sessionMedian(c.turns, (t) => t.usage.input + t.usage.cacheCreation), samples: c.turns.length };
     },
     format: fmtTokens,
@@ -114,9 +149,9 @@ export const METRICS: Record<string, MetricDef> = {
   cacheCreation: {
     id: "cacheCreation",
     label: "cache-creation tokens per turn (median of session medians)",
-    compute(c) {
-      c = { ...c, turns: warmTurns(c.turns) };
-      if (c.turns.length < MIN.turns || sessionCount(c.turns) < MIN.sessions) return null;
+    compute(c, min = MIN) {
+      c = { ...c, turns: warmTurns(mainTurns(c.turns)) };
+      if (c.turns.length < min.turns || sessionCount(c.turns) < min.sessions) return null;
       if (!c.turns.some((t) => t.usage.cacheCreation > 0)) return null;
       return { value: sessionMedian(c.turns, (t) => t.usage.cacheCreation), samples: c.turns.length };
     },
@@ -125,9 +160,9 @@ export const METRICS: Record<string, MetricDef> = {
   firstTurnPrompt: {
     id: "firstTurnPrompt",
     label: "prompt tokens on the first turn of a session (median)",
-    compute(c) {
-      const f = c.turns.filter((t) => t.firstInSession);
-      if (f.length < MIN.sessions) return null;
+    compute(c, min = MIN) {
+      const f = c.turns.filter((t) => t.firstInSession && !t.sidechain);
+      if (f.length < min.firstTurns) return null;
       return { value: median(f.map(promptTokens)), samples: f.length };
     },
     format: fmtTokens,
@@ -135,9 +170,9 @@ export const METRICS: Record<string, MetricDef> = {
   cacheHitRate: {
     id: "cacheHitRate",
     label: "cache hit rate (cached prompt tokens / all prompt tokens)",
-    compute(c) {
-      c = { ...c, turns: warmTurns(c.turns) };
-      if (c.turns.length < MIN.turns || sessionCount(c.turns) < MIN.sessions) return null;
+    compute(c, min = MIN) {
+      c = { ...c, turns: warmTurns(mainTurns(c.turns)) };
+      if (c.turns.length < min.turns || sessionCount(c.turns) < min.sessions) return null;
       const v = cacheHitRate(c.turns);
       return v === null ? null : { value: v, samples: c.turns.length };
     },
@@ -146,8 +181,8 @@ export const METRICS: Record<string, MetricDef> = {
   toolErrorRate: {
     id: "toolErrorRate",
     label: "tool call error rate",
-    compute(c) {
-      if (c.tools.length < MIN.toolCalls || sessionCount(c.tools) < MIN.sessions) return null;
+    compute(c, min = MIN) {
+      if (c.tools.length < min.toolCalls || sessionCount(c.tools) < min.sessions) return null;
       return { value: c.tools.filter((t) => t.isError).length / c.tools.length, samples: c.tools.length };
     },
     format: fmtPct,
@@ -155,13 +190,13 @@ export const METRICS: Record<string, MetricDef> = {
   contextWindow: {
     id: "contextWindow",
     label: "context window (reported, or prompt size at auto-compaction)",
-    compute(c) {
+    compute(c, min = MIN) {
       const reported = c.turns.map((t) => t.contextWindow ?? 0).filter((x) => x > 0);
       // Reported windows are discrete settings, so use the most common value
       // (ties go to the larger window, which avoids reporting a shrink on a tie).
-      if (reported.length >= 1) return { value: mode(reported), samples: reported.length };
+      if (reported.length) return reported.length >= min.contextReports ? { value: mode(reported), samples: reported.length } : null;
       const auto = c.compactions.filter((e) => e.auto).map((e) => e.preTokens);
-      if (auto.length < MIN.compactions) return null;
+      if (auto.length < min.compactions) return null;
       return { value: median(auto), samples: auto.length };
     },
     format: fmtTokens,
@@ -181,6 +216,20 @@ export function modalEffort(turns: Turn[]): { effort: string; share: number; sam
   let bestN = -1;
   for (const [k, v] of counts) if (v > bestN) [best, bestN] = [k, v];
   return { effort: best, share: bestN / n, samples: n };
+}
+
+/**
+ * The effort each session started with, before the user changed it. Only
+ * main-thread turns count; subagents inherit the parent's setting and would
+ * let one long session outvote every other session.
+ */
+export function defaultEffortBySession(turns: Turn[]): { sessionKey: string; workloadKey?: string; effort: string }[] {
+  const out = new Map<string, { sessionKey: string; workloadKey?: string; effort: string }>();
+  for (const t of turns) {
+    if (t.sidechain || !t.effort || t.effortSetByUser || out.has(t.sessionKey)) continue;
+    out.set(t.sessionKey, { sessionKey: t.sessionKey, workloadKey: t.workloadKey, effort: t.effort });
+  }
+  return [...out.values()];
 }
 
 export function compareVersions(a: string, b: string): number {
@@ -242,13 +291,14 @@ export function buildSegments(ds: Dataset): Segment[] {
       cliVersion: c.version,
       model: c.model,
       turns: c.turns.length,
+      subagentTurns: c.turns.filter((t) => t.sidechain).length,
       sessions: new Set(c.turns.map((t) => t.sessionKey)).size,
       firstSeen: Math.min(...ts),
       lastSeen: Math.max(...ts),
       medianPromptTokens: median(c.turns.map(promptTokens)),
       medianNewInputTokens: median(c.turns.map((t) => t.usage.input + t.usage.cacheCreation)),
       medianCacheCreationTokens: median(c.turns.map((t) => t.usage.cacheCreation)),
-      medianOutputTokens: median(c.turns.map((t) => t.usage.output)),
+      medianOutputTokens: median((c.turns.some((t) => !t.partial) ? c.turns.filter((t) => !t.partial) : c.turns).map((t) => t.usage.output)),
       medianFirstTurnPromptTokens: firsts.length ? median(firsts) : null,
       cacheHitRate: cacheHitRate(c.turns),
       toolCalls: c.tools.length,

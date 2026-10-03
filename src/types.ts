@@ -43,8 +43,22 @@ export interface Turn {
   usage: Usage;
   /** True for the first API response of a session (startup overhead signal). */
   firstInSession?: boolean;
-  /** Subagent / sidechain traffic. Excluded from requested-vs-served comparisons. */
+  /**
+   * Subagent / sidechain traffic. Excluded from requested-vs-served comparisons
+   * and from token metrics, because its size depends on which subagent ran.
+   */
   sidechain?: boolean;
+  /**
+   * Opaque key for the workload the turn belongs to (a hash of the project
+   * directory plus the client, such as CLI or desktop app). Token metrics are
+   * compared within a workload so that a change in what you worked on is not
+   * mistaken for a change in the agent. Never printed.
+   */
+  workloadKey?: string;
+  /** The user picked the effort level in this session (for example with /effort). */
+  effortSetByUser?: boolean;
+  /** The log never recorded the final line of this response, so `usage.output` is a partial count. */
+  partial?: boolean;
 }
 
 /** Outcome of one tool call. */
@@ -55,6 +69,9 @@ export interface ToolResult {
   cliVersion?: string;
   model?: string;
   isError: boolean;
+  /** See Turn.workloadKey. */
+  workloadKey?: string;
+  sidechain?: boolean;
 }
 
 /** Discrete events worth surfacing on their own. */
@@ -150,6 +167,8 @@ export interface Segment {
   cliVersion: string;
   model: string;
   turns: number;
+  /** Of `turns`, how many came from subagents. Token metrics in `check` use main-thread turns only. */
+  subagentTurns: number;
   sessions: number;
   firstSeen: number;
   lastSeen: number;

@@ -1,7 +1,7 @@
 export * from "./types.js";
 export { adapters, getAdapter, claudeAdapter, codexAdapter } from "./adapters/index.js";
-export { loadDataset, type LoadOptions } from "./load.js";
-export { buildSegments, METRICS, median, normalizeModel, compareVersions } from "./metrics.js";
+export { loadDataset, dropStaleCopies, type LoadOptions } from "./load.js";
+export { buildSegments, METRICS, MIN, MIN_STRATUM, median, normalizeModel, compareVersions } from "./metrics.js";
 export {
   runDetectors,
   detectVersionShifts,
@@ -10,6 +10,7 @@ export {
   detectModelMismatch,
   detectHiddenModels,
   detectFallbacks,
+  compareCohorts,
   RULES,
   type CheckOptions,
 } from "./detectors.js";

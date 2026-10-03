@@ -1,6 +1,7 @@
-import { join, sep } from "node:path";
+import { dirname, join, sep } from "node:path";
+import { normalizeModel } from "../metrics.js";
 import type { Adapter, AgentEvent, DiscoverOptions, ParsedFile, ToolResult, Turn } from "../types.js";
-import { findFiles, num, readJsonl, sessionKeyFor, splitPathList, toMs } from "./util.js";
+import { findFiles, num, readJsonl, sessionKeyFor, splitPathList, toMs, workloadKeyFor } from "./util.js";
 
 /**
  * Claude Code writes one JSONL file per session under
@@ -22,7 +23,18 @@ import { findFiles, num, readJsonl, sessionKeyFor, splitPathList, toMs } from ".
  * - type "system" subtype "compact_boundary": compactMetadata.preTokens, trigger.
  * - a user or local_command record containing "<command-name>/model<": the user
  *   switched models by hand, so the requested model is unknown until the next
- *   identity record.
+ *   identity record. The model picker can also set effort, so later turns
+ *   count as user-chosen effort.
+ * - "<command-name>/effort<": the user set the effort level; later turns in the
+ *   file are not evidence of the default.
+ * - entrypoint (cli, claude-desktop, ...) and the project directory form the
+ *   workload key. message.stop_reason marks the final line of a response;
+ *   responses that never got one have a partial output count.
+ *
+ * When the user switches models outside a recorded /model command (for example
+ * from the desktop app), the served model changes one or two responses before
+ * the identity record catches up. Mismatched turns that the next identity
+ * record confirms are treated as part of the switch, not as a mismatch.
  */
 export const claudeAdapter: Adapter = {
   id: "claude",
@@ -43,7 +55,10 @@ export const claudeAdapter: Adapter = {
   async parseFile(file: string): Promise<ParsedFile & { badLines: number }> {
     const sessionKey = sessionKeyFor("claude", file);
     const fileIsSubagent = file.includes(`${sep}subagents${sep}`) || file.includes("/subagents/");
+    // <root>/<project>/<session>.jsonl or <root>/<project>/<session>/subagents/<agent>.jsonl
+    const projectDir = fileIsSubagent ? dirname(dirname(dirname(file))) : dirname(file);
     const turnsByKey = new Map<string, Turn>();
+    const stopped = new Set<Turn>();
     const turns: Turn[] = [];
     const toolResults: ToolResult[] = [];
     const events: AgentEvent[] = [];
@@ -51,6 +66,10 @@ export const claudeAdapter: Adapter = {
     let requested: string | undefined;
     let lastServed: string | undefined;
     let sawFirst = false;
+    let userEffort = false;
+    let client: string | undefined;
+    // Main-thread turns whose served model differs from the requested one since the last identity record.
+    let unconfirmed: Turn[] = [];
 
     const filter = (l: string) =>
       l.includes('"assistant"') ||
@@ -58,7 +77,8 @@ export const claudeAdapter: Adapter = {
       l.includes('"model_consent_fallback"') ||
       l.includes('"compact_boundary"') ||
       l.includes('"identity"') ||
-      l.includes("command-name>/model<");
+      l.includes("command-name>/model<") ||
+      l.includes("command-name>/effort<");
 
     for await (const r of readJsonl(file, filter)) {
       if ("bad" in r) {
@@ -69,6 +89,8 @@ export const claudeAdapter: Adapter = {
       if (!o || typeof o !== "object") continue;
       const ts = toMs(o.timestamp) ?? 0;
       const version: string | undefined = typeof o.version === "string" ? o.version : undefined;
+      if (typeof o.entrypoint === "string" && o.entrypoint) client = o.entrypoint;
+      const workloadKey = workloadKeyFor("claude", projectDir, client);
 
       if (o.type === "assistant" && o.message && typeof o.message === "object") {
         const m = o.message;
@@ -87,13 +109,17 @@ export const claudeAdapter: Adapter = {
           output: num(u.output_tokens),
           reasoning: u.output_tokens_details ? num(u.output_tokens_details.thinking_tokens) : undefined,
         };
+        const hasStop = typeof m.stop_reason === "string" && m.stop_reason !== "";
         const existing = key !== ":" ? turnsByKey.get(key) : undefined;
         if (existing) {
           // Later lines of the same response carry the final output count.
           existing.usage.output = Math.max(existing.usage.output, usage.output);
           if (usage.reasoning !== undefined) existing.usage.reasoning = Math.max(existing.usage.reasoning ?? 0, usage.reasoning);
+          if (hasStop) stopped.add(existing);
           continue;
         }
+        // Placeholder records with no token counts are not API responses.
+        if (usage.input + usage.cacheRead + usage.cacheCreation + usage.output === 0) continue;
         const sidechain = fileIsSubagent || o.isSidechain === true;
         const t: Turn = {
           agent: "claude",
@@ -106,11 +132,15 @@ export const claudeAdapter: Adapter = {
           effort: typeof o.effort === "string" ? o.effort : undefined,
           usage,
           sidechain,
+          workloadKey,
         };
+        if (userEffort && !sidechain) t.effortSetByUser = true;
+        if (hasStop) stopped.add(t);
         if (!sidechain && !sawFirst) {
           t.firstInSession = true;
           sawFirst = true;
         }
+        if (!sidechain && t.requestedModel && model && normalizeModel(t.requestedModel) !== normalizeModel(model)) unconfirmed.push(t);
         if (model) lastServed = model;
         if (key !== ":") turnsByKey.set(key, t);
         turns.push(t);
@@ -127,22 +157,38 @@ export const claudeAdapter: Adapter = {
               cliVersion: version,
               model: lastServed,
               isError: b.is_error === true,
+              workloadKey,
+              sidechain: fileIsSubagent || o.isSidechain === true,
             });
           }
         }
         continue;
       }
 
-      if ((o.type === "user" || o.type === "system") && isModelCommand(o)) {
-        // The user ran /model. The log records the new choice only as a display
-        // name, so stop comparing until the next identity record.
-        requested = undefined;
-        continue;
+      if (o.type === "user" || o.type === "system") {
+        const cmd = slashCommand(o);
+        if (cmd === "/model") {
+          // The user ran /model. The log records the new choice only as a display
+          // name, so stop comparing until the next identity record.
+          requested = undefined;
+          unconfirmed = [];
+          userEffort = true;
+          continue;
+        }
+        if (cmd === "/effort") {
+          userEffort = true;
+          continue;
+        }
       }
 
       if (o.type === "attachment" && o.attachment?.type === "model") {
         const id = o.attachment.identity?.modelId;
-        if (typeof id === "string" && id) requested = id;
+        if (typeof id === "string" && id) {
+          const next = normalizeModel(id);
+          for (const t of unconfirmed) if (t.servedModel && normalizeModel(t.servedModel) === next) t.requestedModel = undefined;
+          unconfirmed = [];
+          requested = id;
+        }
         continue;
       }
 
@@ -177,11 +223,15 @@ export const claudeAdapter: Adapter = {
         }
       }
     }
+    // Only mark partial output when this file records stop reasons at all.
+    if (stopped.size) for (const t of turns) if (!stopped.has(t)) t.partial = true;
     return { turns, toolResults, events, badLines };
   },
 };
 
-function isModelCommand(o: any): boolean {
+function slashCommand(o: any): string | undefined {
   const c = typeof o.message?.content === "string" ? o.message.content : typeof o.content === "string" ? o.content : "";
-  return c.includes("<command-name>/model<");
+  if (c.includes("<command-name>/model<")) return "/model";
+  if (c.includes("<command-name>/effort<")) return "/effort";
+  return undefined;
 }
