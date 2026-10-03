@@ -27,6 +27,7 @@
   "scripts": {
     "build": "tsup",
     "prepare": "tsup",
+    "pretest": "tsup --silent",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "demo-data": "node scripts/make-demo-data.mjs"

@@ -7,6 +7,15 @@ export function median(xs: number[]): number {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 
+export function mode(xs: number[]): number {
+  const c = new Map<number, number>();
+  for (const x of xs) c.set(x, (c.get(x) ?? 0) + 1);
+  let best = 0;
+  let bestN = -1;
+  for (const [v, n] of c) if (n > bestN || (n === bestN && v > best)) [best, bestN] = [v, n];
+  return best;
+}
+
 export function promptTokens(t: Turn): number {
   return t.usage.input + t.usage.cacheRead + t.usage.cacheCreation;
 }
@@ -148,7 +157,9 @@ export const METRICS: Record<string, MetricDef> = {
     label: "context window (reported, or prompt size at auto-compaction)",
     compute(c) {
       const reported = c.turns.map((t) => t.contextWindow ?? 0).filter((x) => x > 0);
-      if (reported.length >= 1) return { value: median(reported), samples: reported.length };
+      // Reported windows are discrete settings, so use the most common value
+      // (ties go to the larger window, which avoids reporting a shrink on a tie).
+      if (reported.length >= 1) return { value: mode(reported), samples: reported.length };
       const auto = c.compactions.filter((e) => e.auto).map((e) => e.preTokens);
       if (auto.length < MIN.compactions) return null;
       return { value: median(auto), samples: auto.length };

@@ -102,10 +102,11 @@ function wrap(text: string, width: number, indent: string): string {
 
 export function formatFinding(f: Finding): string {
   const head = `${severityLabel(f.severity)}  ${f.agent}  ${f.model ?? ""}  ${bold(f.title)}`;
+  const w = Math.max(16, ...f.evidence.map((e) => e.display.length)) + 2;
   const ev = f.evidence.map((e) => {
     const v = e.versions?.length ? (e.versions.length > 2 ? `${e.versions[0]} to ${e.versions[e.versions.length - 1]}` : e.versions.join(", ")) : "";
     const when = e.from ? `${e.from} to ${e.to}` : "";
-    return `       ${e.label.padEnd(9)} ${e.display.padEnd(22)} ${dim(`cli ${v}  ${when}  n=${fmtInt(e.samples)}`)}`;
+    return `       ${e.label.padEnd(9)} ${e.display.padEnd(w)} ${dim(`cli ${v}  ${when}  n=${fmtInt(e.samples)}`)}`;
   });
   return [head, ...ev, wrap(f.explanation, 92, "       ")].join("\n");
 }
