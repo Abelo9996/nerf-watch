@@ -1,23 +1,23 @@
-# Contributing to nerfwatch
+# Contributing to nerf-watch
 
 Thanks for helping. The two most useful contributions are new agent adapters and reports of false positives or missed regressions from real use.
 
 ## Setup
 
 ```sh
-git clone https://github.com/Abelo9996/nerfwatch
-cd nerfwatch
+git clone https://github.com/Abelo9996/nerf-watch
+cd nerf-watch
 npm install        # also builds dist/ via the prepare script
 npm test           # builds, then runs vitest
 node dist/cli.js scan
 ```
 
-Node 20 or newer. No native dependencies; keep it that way so `npx github:Abelo9996/nerfwatch` works everywhere.
+Node 20 or newer. No native dependencies; keep it that way so `npx github:Abelo9996/nerf-watch` works everywhere.
 
 ## Ground rules
 
 - **Never commit real session logs**, or anything copied from them: prompts, paths, project names, session ids. Tests use synthetic data from `scripts/make-demo-data.mjs` or records written inline in the test.
-- Nothing may make network requests. nerfwatch is local only.
+- Nothing may make network requests. nerf-watch is local only.
 - Records produced by adapters (`src/types.ts`) must not carry prompt text, tool output or paths. The CLI test checks reports for planted sentinel strings; keep that test passing.
 - Plain, specific wording in output and docs.
 

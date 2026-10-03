@@ -3,7 +3,7 @@ dist/
 coverage/
 *.tgz
 .DS_Store
-nerfwatch-report.*
+nerf-watch-report.*
 report.md
 report.json
 .demo-data/

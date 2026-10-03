@@ -1,5 +1,5 @@
 name: Bug report
-description: nerfwatch crashed, misparsed a log, or printed something wrong.
+description: nerf-watch crashed, misparsed a log, or printed something wrong.
 labels: [bug]
 body:
   - type: markdown
@@ -16,13 +16,13 @@ body:
     id: output
     attributes:
       label: Output
-      description: Terminal output or the error message. `nerfwatch scan --json` output is safe to share (aggregate numbers only).
+      description: Terminal output or the error message. `nerf-watch scan --json` output is safe to share (aggregate numbers only).
       render: text
   - type: input
     id: version
     attributes:
-      label: nerfwatch version
-      description: Output of `nerfwatch --version`
+      label: nerf-watch version
+      description: Output of `nerf-watch --version`
     validations:
       required: true
   - type: dropdown

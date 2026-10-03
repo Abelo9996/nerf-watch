@@ -372,7 +372,7 @@ export function detectHiddenModels(ds: Dataset): Finding[] {
       trigger: "event",
       title: `Unrecognized model id answered: ${g.model}`,
       explanation:
-        `${g.turns.length} API responses came from "${g.model}", which does not match any public model naming pattern nerfwatch knows. ` +
+        `${g.turns.length} API responses came from "${g.model}", which does not match any public model naming pattern nerf-watch knows. ` +
         `It may be an internal, experimental or A/B test model. If you did not opt into a preview, you were served something other than a released model.`,
       evidence: [
         { label: "served", versions, ...span({ turns: g.turns, tools: [], compactions: [] }), samples: g.turns.length, value: g.turns.length, display: `${g.turns.length} turns` },

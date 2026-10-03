@@ -1,30 +1,32 @@
-# nerfwatch
+# nerf-watch
+
+[![ci](https://github.com/Abelo9996/nerf-watch/actions/workflows/ci.yml/badge.svg)](https://github.com/Abelo9996/nerf-watch/actions/workflows/ci.yml) [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Find out when your coding agent quietly got worse or more expensive.
 
-nerfwatch reads the session logs that Claude Code and Codex already write on your machine and flags changes you did not make: a different model answered than the one you picked, reasoning effort dropped, the context window shrank, cache writes per turn jumped after a CLI update, the cache hit rate collapsed, or tool calls started failing more often. Everything runs locally. Nothing is uploaded.
+nerf-watch reads the session logs that Claude Code and Codex already write on your machine and flags changes you did not make: a different model answered than the one you picked, reasoning effort dropped, the context window shrank, cache writes per turn jumped after a CLI update, the cache hit rate collapsed, or tool calls started failing more often. Everything runs locally. Nothing is uploaded.
 
-It is not a cost meter. Tools like [ccusage](https://github.com/ryoppippi/ccusage) already tell you what you spent. nerfwatch compares your own history across CLI versions and over time, and tells you what changed and when.
+It is not a cost meter. Tools like [ccusage](https://github.com/ryoppippi/ccusage) already tell you what you spent. nerf-watch compares your own history across CLI versions and over time, and tells you what changed and when.
 
 ## Quickstart
 
 Requires Node.js 20 or newer.
 
 ```sh
-npx github:Abelo9996/nerfwatch check
+npx github:Abelo9996/nerf-watch check
 ```
 
 That reads every Claude Code and Codex session on the machine, prints what changed, and exits with status 1 if any alert fired. Other commands:
 
 ```sh
-npx github:Abelo9996/nerfwatch scan                          # baselines per CLI version and model
-npx github:Abelo9996/nerfwatch check --since 30d --agent claude
-npx github:Abelo9996/nerfwatch report --out nerfwatch-report.md   # anonymized, shareable
+npx github:Abelo9996/nerf-watch scan                          # baselines per CLI version and model
+npx github:Abelo9996/nerf-watch check --since 30d --agent claude
+npx github:Abelo9996/nerf-watch report --out nerf-watch-report.md   # anonymized, shareable
 ```
 
 ## Example
 
-Output from `nerfwatch check` on the synthetic logs in `scripts/make-demo-data.mjs` (no real data):
+Output from `nerf-watch check` on the synthetic logs in `scripts/make-demo-data.mjs` (no real data):
 
 ```text
 claude: 32 session files, 1,280 turns; codex: 24 session files, 720 turns, 2026-08-23 to 2026-10-02
@@ -63,7 +65,7 @@ WARN   codex  gpt-5.5  Context window shrank in the last 7 days with no CLI chan
 
 ```sh
 node scripts/make-demo-data.mjs /tmp/nw-demo
-nerfwatch check --root claude=/tmp/nw-demo/claude/projects --root codex=/tmp/nw-demo/codex/sessions
+nerf-watch check --root claude=/tmp/nw-demo/claude/projects --root codex=/tmp/nw-demo/codex/sessions
 ```
 
 ## What it detects
@@ -88,19 +90,19 @@ Use `--fail-on warn` to make warnings fail scripts too, or `--fail-on never` to 
 ## How it works
 
 1. **Adapters** (`src/adapters/`) find each agent's log files and turn each line into a small canonical record: one per model API response (tokens, CLI version, requested and served model, effort, context window), one per tool result (error or not), plus a few events (fallbacks, compactions, API errors). Prompts and outputs are never read into these records.
-2. **Baselines** group responses by (agent, CLI version, model). `nerfwatch scan` prints them.
+2. **Baselines** group responses by (agent, CLI version, model). `nerf-watch scan` prints them.
 3. **Detectors** walk each model's versions in order and compare each version (pooled with up to two following versions when it has little data) against the up to three versions before it. When a threshold trips, the baseline restarts at the new version, so one regression is reported once, at the version where it began. A separate pass compares recent and older traffic on the same version.
 4. Medians are taken per session first, then across sessions, so one huge session cannot create a finding by itself. Each side of a comparison needs at least 5 sessions and 50 turns (100 tool calls for error rates). The first request of each session is excluded from per-turn token metrics because it always pays a cold cache; it has its own startup metric.
 
 Details per agent:
 
 - **Claude Code** writes one line per content block, so responses are merged by message id and request id, and copies of the same response in resumed sessions are dropped. The requested model comes from the session's model identity record; after a manual `/model` switch it is treated as unknown until the next identity record, so your own switches are not reported. Subagent transcripts are excluded from the model comparison.
-- **Codex** reports `input_tokens` including cached tokens; nerfwatch splits them. Repeated `token_count` events are dropped. Current Codex logs record the requested model and effort but rarely the served model, so the requested-vs-served check for Codex only runs when a reroute event is present.
+- **Codex** reports `input_tokens` including cached tokens; nerf-watch splits them. Repeated `token_count` events are dropped. Current Codex logs record the requested model and effort but rarely the served model, so the requested-vs-served check for Codex only runs when a reroute event is present.
 
 ## Privacy
 
-- Local only. nerfwatch reads files under your home directory and prints to your terminal. It makes no network requests and has no telemetry.
-- `nerfwatch report` writes aggregate numbers only: token medians, rates, CLI versions, model ids, dates and counts. It contains no prompts, responses, tool output, file paths, project names or session ids. Model ids that look like account-specific deployments (ARNs, URLs, long numeric ids) are replaced with a hash. The test suite plants sentinel strings in synthetic logs and fails if any of them reach a report.
+- Local only. nerf-watch reads files under your home directory and prints to your terminal. It makes no network requests and has no telemetry.
+- `nerf-watch report` writes aggregate numbers only: token medians, rates, CLI versions, model ids, dates and counts. It contains no prompts, responses, tool output, file paths, project names or session ids. Model ids that look like account-specific deployments (ARNs, URLs, long numeric ids) are replaced with a hash. The test suite plants sentinel strings in synthetic logs and fails if any of them reach a report.
 - Read the report before you share it. It is plain markdown or JSON.
 
 ## Supported agents
@@ -115,20 +117,20 @@ Paths resolve the same way on macOS, Linux and Windows (`%USERPROFILE%\.claude`,
 ## Command reference
 
 ```text
-nerfwatch scan    [--since WHEN] [--agent ID] [--root AGENT=DIR] [--json]
-nerfwatch check   [--since WHEN] [--agent ID] [--root AGENT=DIR] [--json]
+nerf-watch scan    [--since WHEN] [--agent ID] [--root AGENT=DIR] [--json]
+nerf-watch check   [--since WHEN] [--agent ID] [--root AGENT=DIR] [--json]
                   [--fail-on alert|warn|never] [--recent-days 7] [--baseline-days 28]
-nerfwatch report  [--since WHEN] [--agent ID] [--root AGENT=DIR] [--json] [--out FILE.md|FILE.json]
+nerf-watch report  [--since WHEN] [--agent ID] [--root AGENT=DIR] [--json] [--out FILE.md|FILE.json]
 ```
 
 `WHEN` is a date (`2026-09-01`) or a span (`12h`, `7d`, `4w`). Exit codes: 0 ok, 1 findings at or above `--fail-on`, 2 usage error.
 
 ## Agent skill
 
-`skills/nerfwatch/SKILL.md` teaches coding agents when and how to run nerfwatch. Install it with:
+`skills/nerf-watch/SKILL.md` teaches coding agents when and how to run nerf-watch. Install it with:
 
 ```sh
-npx skills add Abelo9996/nerfwatch
+npx skills add Abelo9996/nerf-watch
 ```
 
 ## Roadmap
@@ -139,8 +141,8 @@ npx skills add Abelo9996/nerfwatch
 
 ## Related projects
 
-- [rerunbench](https://github.com/Abelo9996/rerunbench): measures how consistently a coding agent solves the same task across reruns.
-- [snapback](https://github.com/Abelo9996/snapback): undo for any coding agent.
+- [rerun-bench](https://github.com/Abelo9996/rerun-bench): measures how consistently a coding agent solves the same task across reruns.
+- [snap-back](https://github.com/Abelo9996/snap-back): undo for any coding agent.
 
 ## Contributing
 

@@ -1,10 +1,10 @@
 {
-  "name": "nerfwatch",
+  "name": "nerf-watch",
   "version": "0.1.0",
   "description": "Find out when your coding agent quietly got worse or more expensive. Reads local Claude Code and Codex session logs and flags changes you did not make.",
   "type": "module",
   "bin": {
-    "nerfwatch": "dist/cli.js"
+    "nerf-watch": "dist/cli.js"
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -45,10 +45,10 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Abelo9996/nerfwatch.git"
+    "url": "git+https://github.com/Abelo9996/nerf-watch.git"
   },
-  "homepage": "https://github.com/Abelo9996/nerfwatch#readme",
-  "bugs": "https://github.com/Abelo9996/nerfwatch/issues",
+  "homepage": "https://github.com/Abelo9996/nerf-watch#readme",
+  "bugs": "https://github.com/Abelo9996/nerf-watch/issues",
   "dependencies": {
     "cac": "^6.7.14"
   },

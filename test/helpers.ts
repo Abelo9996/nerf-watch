@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-export function tmp(prefix = "nerfwatch-"): string {
+export function tmp(prefix = "nerf-watch-"): string {
   return mkdtempSync(join(tmpdir(), prefix));
 }
 

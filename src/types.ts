@@ -23,7 +23,7 @@ export interface Usage {
   reasoning?: number;
 }
 
-/** One model API response ("turn" in nerfwatch terminology). */
+/** One model API response ("turn" in nerf-watch terminology). */
 export interface Turn {
   agent: AgentId;
   /** Opaque per-session key. Adapters must not use anything that reveals a path. */

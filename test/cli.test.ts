@@ -76,7 +76,7 @@ describe("cli end to end on synthetic logs", () => {
       expect(text).not.toMatch(/[0-9a-f]{8}-0000-4000-8000/); // session ids
     }
     const md = readFileSync(join(dir, "r.md"), "utf8");
-    expect(md).toContain("# nerfwatch report");
+    expect(md).toContain("# nerf-watch report");
     expect(md).toContain("Requested claude-opus-5 but claude-sonnet-5 answered");
     const j = JSON.parse(readFileSync(join(dir, "r.json"), "utf8"));
     expect(j.summary).toEqual({ alert: 2, warn: 3, info: 0 });
@@ -90,7 +90,9 @@ describe("cli end to end on synthetic logs", () => {
     expect(run(["check", "--agent", "nope"]).code).toBe(2);
     expect(run(["scan", "--since", "whenever"]).code).toBe(2);
     expect(run(["frobnicate"]).code).toBe(2);
-    expect(run(["--help"]).out).toContain("check");
+    const help = run(["--help"]).out;
+    expect(help).toContain("check");
+    expect(help).toMatch(/^nerf-watch\b/m);
   });
 
   it("reads CLAUDE_CONFIG_DIR and CODEX_HOME", () => {

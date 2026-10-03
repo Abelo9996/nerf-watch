@@ -31,7 +31,7 @@ function noData(json: boolean | undefined): void {
 }
 
 export function buildCli() {
-  const cli = cac("nerfwatch");
+  const cli = cac("nerf-watch");
 
   const common = (cmd: ReturnType<typeof cli.command>) =>
     cmd
@@ -52,7 +52,7 @@ export function buildCli() {
     console.log("");
     console.log(table(SEGMENT_HEADERS, segmentRows(segs), SEGMENT_ALIGN));
     console.log("");
-    console.log(dim("Medians are per API response. Cache hit = cached prompt tokens / all prompt tokens. Run `nerfwatch check` to compare them."));
+    console.log(dim("Medians are per API response. Cache hit = cached prompt tokens / all prompt tokens. Run `nerf-watch check` to compare them."));
   });
 
   common(cli.command("check", "Detect changes you did not make. Exits 1 when alerts are found"))
@@ -76,14 +76,14 @@ export function buildCli() {
           console.log("");
         }
         console.log(bold(`${counts.alert} alert(s), ${counts.warn} warning(s), ${counts.info} info`));
-        if (findings.length) console.log(dim("Share an anonymized copy with: nerfwatch report --out nerfwatch-report.md"));
+        if (findings.length) console.log(dim("Share an anonymized copy with: nerf-watch report --out nerf-watch-report.md"));
       }
       const failAt: Severity[] = o.failOn === "warn" ? ["alert", "warn"] : o.failOn === "alert" ? ["alert"] : [];
       if (findings.some((f) => failAt.includes(f.severity))) process.exitCode = 1;
     });
 
   common(cli.command("report", "Write an anonymized, shareable report (no prompts, paths or project names)"))
-    .option("--out <file>", "Output file; .md or .json picks the format", { default: "nerfwatch-report.md" })
+    .option("--out <file>", "Output file; .md or .json picks the format", { default: "nerf-watch-report.md" })
     .action(async (o: Common & { out: string }) => {
       const ds = await load(o);
       if (!ds.turns.length) return noData(o.json);
@@ -109,14 +109,14 @@ async function main() {
     cli.parse(process.argv, { run: false });
     if (!cli.matchedCommand) {
       if (cli.options.help || cli.options.version) return;
-      if (cli.args.length) throw new UsageError(`Unknown command "${cli.args[0]}". Try: nerfwatch --help`);
+      if (cli.args.length) throw new UsageError(`Unknown command "${cli.args[0]}". Try: nerf-watch --help`);
       cli.outputHelp();
       return;
     }
     await cli.runMatchedCommand();
   } catch (e) {
     if (e instanceof UsageError || (e instanceof Error && e.name === "CACError")) {
-      console.error(`nerfwatch: ${e.message}`);
+      console.error(`nerf-watch: ${e.message}`);
       process.exitCode = 2;
       return;
     }

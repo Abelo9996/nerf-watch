@@ -3,7 +3,7 @@
 // Nothing here comes from real logs: every value is generated.
 //
 // Usage: node scripts/make-demo-data.mjs <out-dir>
-//   then: nerfwatch check --root claude=<out-dir>/claude/projects --root codex=<out-dir>/codex/sessions
+//   then: nerf-watch check --root claude=<out-dir>/claude/projects --root codex=<out-dir>/codex/sessions
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -196,5 +196,5 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     process.exit(2);
   }
   const { claudeRoot, codexRoot } = writeDemo(out);
-  console.log(`Wrote synthetic logs.\n  nerfwatch check --root claude=${claudeRoot} --root codex=${codexRoot}`);
+  console.log(`Wrote synthetic logs.\n  nerf-watch check --root claude=${claudeRoot} --root codex=${codexRoot}`);
 }

@@ -24,7 +24,7 @@ export function scrubModel(m: string): string {
 }
 
 export interface Report {
-  tool: "nerfwatch";
+  tool: "nerf-watch";
   toolVersion: string;
   generatedAt: string;
   platform: string;
@@ -65,7 +65,7 @@ export function buildReport(ds: Dataset, findings: Finding[]): Report {
     };
   });
   return {
-    tool: "nerfwatch",
+    tool: "nerf-watch",
     toolVersion: toolVersion(),
     generatedAt: new Date().toISOString(),
     platform: process.platform,
@@ -78,15 +78,15 @@ export function buildReport(ds: Dataset, findings: Finding[]): Report {
     findings: scrubbedFindings,
     summary: countBySeverity(findings),
     privacy:
-      "Generated locally by nerfwatch. Contains only aggregate token counts, rates, CLI versions, model ids and dates. No prompts, responses, tool output, file paths, project names or session ids.",
+      "Generated locally by nerf-watch. Contains only aggregate token counts, rates, CLI versions, model ids and dates. No prompts, responses, tool output, file paths, project names or session ids.",
   };
 }
 
 export function reportToMarkdown(r: Report): string {
   const out: string[] = [];
-  out.push(`# nerfwatch report`);
+  out.push(`# nerf-watch report`);
   out.push("");
-  out.push(`Generated ${r.generatedAt.slice(0, 10)} by nerfwatch ${r.toolVersion} on ${r.platform}. Data window: ${r.window.from ?? "n/a"} to ${r.window.to ?? "n/a"}.`);
+  out.push(`Generated ${r.generatedAt.slice(0, 10)} by nerf-watch ${r.toolVersion} on ${r.platform}. Data window: ${r.window.from ?? "n/a"} to ${r.window.to ?? "n/a"}.`);
   out.push("");
   out.push(`> ${r.privacy}`);
   out.push("");

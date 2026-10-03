@@ -1,5 +1,5 @@
 name: Report a suspected nerf
-description: nerfwatch flagged a change (or you think it missed one) and you want it on record.
+description: nerf-watch flagged a change (or you think it missed one) and you want it on record.
 labels: [regression-report]
 body:
   - type: markdown
@@ -7,14 +7,14 @@ body:
       value: |
         Attach the anonymized report so others can compare. Generate it with:
 
-            npx github:Abelo9996/nerfwatch report --out nerfwatch-report.md
+            npx github:Abelo9996/nerf-watch report --out nerf-watch-report.md
 
         It contains only aggregate numbers, CLI versions, model ids and dates. Read it before posting.
   - type: textarea
     id: report
     attributes:
       label: Anonymized report
-      description: Paste the contents of nerfwatch-report.md, or attach the file.
+      description: Paste the contents of nerf-watch-report.md, or attach the file.
     validations:
       required: true
   - type: input
