@@ -1,0 +1,41 @@
+name: New adapter request
+description: Ask for support for another coding agent.
+labels: [adapter]
+body:
+  - type: input
+    id: agent
+    attributes:
+      label: Agent
+      placeholder: "OpenCode, Gemini CLI, DeepSeek Harness, pi, ..."
+    validations:
+      required: true
+  - type: textarea
+    id: location
+    attributes:
+      label: Where does it store session logs?
+      description: Default directory on each OS and any environment variable that overrides it.
+  - type: textarea
+    id: shape
+    attributes:
+      label: Record shapes
+      description: |
+        Keys and types only, no content. For JSONL logs this command is safe to run and share:
+        `jq -c '[.type, (keys|join(","))]' session.jsonl | sort | uniq -c`
+      render: text
+  - type: checkboxes
+    id: fields
+    attributes:
+      label: What the logs record
+      options:
+        - label: Token usage per API response (input / output / cached)
+        - label: Model requested
+        - label: Model that actually answered
+        - label: Reasoning effort
+        - label: CLI version
+        - label: Tool call results or errors
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Contributing
+      options:
+        - label: I can open a PR for this adapter (see CONTRIBUTING.md)

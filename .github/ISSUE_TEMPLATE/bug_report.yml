@@ -1,0 +1,39 @@
+name: Bug report
+description: nerfwatch crashed, misparsed a log, or printed something wrong.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Please do not paste raw session logs. They contain your prompts and file paths.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The command you ran, what you expected, and what you got.
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: Terminal output or the error message. `nerfwatch scan --json` output is safe to share (aggregate numbers only).
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: nerfwatch version
+      description: Output of `nerfwatch --version`
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options: [macOS, Linux, Windows, Other]
+    validations:
+      required: true
+  - type: input
+    id: agents
+    attributes:
+      label: Agent and CLI version
+      placeholder: "Claude Code 2.1.287, Codex 0.142.5"

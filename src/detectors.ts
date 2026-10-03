@@ -335,7 +335,7 @@ export function detectModelMismatch(ds: Dataset): Finding[] {
       trigger: "event",
       title: `Requested ${g.req} but ${g.served} answered`,
       explanation:
-        `${g.turns.length} of ${total} main-thread API responses (${(share * 100).toFixed(1)}%) for sessions configured to use ${g.req} were served by ${g.served}. ` +
+        `${g.turns.length.toLocaleString("en-US")} of ${total.toLocaleString("en-US")} main-thread API responses (${(share * 100).toFixed(1)}%) for sessions configured to use ${g.req} were served by ${g.served}. ` +
         `If you switched models mid-session or use a mode that routes some turns to another model on purpose, this is expected. Otherwise you got a different model than you chose.`,
       evidence: [
         { label: "requested", versions, ...span({ turns: g.turns, tools: [], compactions: [] }), samples: total, value: total, display: g.req },

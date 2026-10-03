@@ -1,0 +1,38 @@
+name: Report a suspected nerf
+description: nerfwatch flagged a change (or you think it missed one) and you want it on record.
+labels: [regression-report]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Attach the anonymized report so others can compare. Generate it with:
+
+            npx github:Abelo9996/nerfwatch report --out nerfwatch-report.md
+
+        It contains only aggregate numbers, CLI versions, model ids and dates. Read it before posting.
+  - type: textarea
+    id: report
+    attributes:
+      label: Anonymized report
+      description: Paste the contents of nerfwatch-report.md, or attach the file.
+    validations:
+      required: true
+  - type: input
+    id: agent
+    attributes:
+      label: Agent, CLI version and model
+      placeholder: "Claude Code 2.1.287 with claude-opus-5"
+    validations:
+      required: true
+  - type: textarea
+    id: noticed
+    attributes:
+      label: What you noticed
+      description: Slower, worse answers, burning through limits faster, more tool failures, and when it started.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I did not change the model, effort or other settings around the time of the change
+        - label: I filed or plan to file this with the vendor as well
