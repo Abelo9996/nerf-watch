@@ -35,9 +35,21 @@ export function parseRoots(v: unknown): Record<string, string[]> | undefined {
     const s = String(item);
     const i = s.indexOf("=");
     if (i <= 0) throw new UsageError(`--root expects agent=dir, got "${s}"`);
-    const agent = s.slice(0, i);
-    (out[agent] ??= []).push(s.slice(i + 1));
+    const agent = s.slice(0, i).trim();
+    if (!adapters.some((ad) => ad.id === agent)) {
+      throw new UsageError(`--root: unknown agent "${agent}" in "${s}". Known: ${adapters.map((ad) => ad.id).join(", ")}`);
+    }
+    const dir = s.slice(i + 1).trim();
+    if (!dir) throw new UsageError(`--root expects agent=dir, got "${s}"`);
+    (out[agent] ??= []).push(dir);
   }
   return out;
 }
 
+
+/** A whole number of days, 1 or more. */
+export function parsePositiveInt(flag: string, v: unknown): number {
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 1) throw new UsageError(`${flag} must be a whole number of days, 1 or more, got "${v}"`);
+  return n;
+}

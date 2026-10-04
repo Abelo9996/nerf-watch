@@ -34,44 +34,60 @@ npx nerf-watch share                         # contribute findings to the public
 下面是 `nerf-watch check` 在 `scripts/make-demo-data.mjs` 生成的合成日志上的输出（不含任何真实数据）：
 
 ```text
-claude: 32 session files, 1,280 turns; codex: 24 session files, 720 turns, 2026-08-23 to 2026-10-02
+Read 2,000 model responses from 56 session files (claude 1,280, codex 720), 2026-08-23 to 2026-10-02.
+Result: 2 alerts and 3 warnings. Alerts are large or clear-cut changes; warnings are smaller ones worth a look.
 
 ALERT  claude  claude-sonnet-5  Requested claude-opus-5 but claude-sonnet-5 answered
-       requested claude-opus-5                 cli 2.1.272  2026-09-18 to 2026-09-28  n=1,280
-       served    claude-sonnet-5 (120 turns)   cli 2.1.272  2026-09-18 to 2026-09-28  n=120
+       requested claude-opus-5                     cli 2.1.270 to 2.1.272   2026-08-23 to 2026-10-01   1,280 turns
+       served    claude-sonnet-5 (9.4% of turns)   cli 2.1.272              2026-09-18 to 2026-09-28   120 turns
        120 of 1,280 main-thread API responses (9.4%) for sessions configured to use claude-opus-5
        were served by claude-sonnet-5. If you switched models mid-session or use a mode that routes
        some turns to another model on purpose, this is expected. Otherwise you got a different
        model than you chose.
+       Next: If you did not switch models or turn on a mode that routes some turns to another
+       model, report it to the agent's vendor with the output of `nerf-watch report` attached.
 
 ALERT  claude  claude-opus-5  Cache-creation tokens per turn jumped after CLI 2.1.272
-       before    926                cli 2.1.270, 2.1.271  2026-08-23 to 2026-09-16  n=780
-       after     3,037              cli 2.1.272  2026-09-19 to 2026-10-01  n=351
-       Median cache writes per API call went from 926 to 3,037. Cache writes are billed above the
-       normal input price. A jump usually means the cached prefix is being invalidated and rebuilt
-       more often. The change shows up in 3 of 3 separate workloads (projects) that have enough
-       data on both sides, so it is not explained by a change in what you worked on.
+       before    926 tokens         cli 2.1.270, 2.1.271   2026-08-23 to 2026-09-16   780 turns
+       after     3,037 tokens       cli 2.1.272            2026-09-19 to 2026-10-01   351 turns
+       Median cache writes per API call went from 926 tokens to 3,037 tokens. Cache writes are
+       billed above the normal input price. A jump usually means the cached prefix is being
+       invalidated and rebuilt more often. The change shows up in 3 of 3 separate workloads
+       (projects) that have enough data on both sides, so it is not explained by a change in what
+       you worked on.
+       Next: Run `nerf-watch scan` to see the numbers for each CLI version. Going back to CLI
+       2.1.271 for a day is the quickest way to confirm it. If it holds, report it to the agent's
+       vendor with the output of `nerf-watch report` attached.
 
 WARN   claude  claude-opus-5  Cache hit rate collapsed after CLI 2.1.272
-       before    97.8%              cli 2.1.270, 2.1.271  2026-08-23 to 2026-09-16  n=780
-       after     80.2%              cli 2.1.272  2026-09-19 to 2026-10-01  n=351
+       before    97.8%              cli 2.1.270, 2.1.271   2026-08-23 to 2026-09-16   780 turns
+       after     80.2%              cli 2.1.272            2026-09-19 to 2026-10-01   351 turns
+       Next: Run `nerf-watch scan` to see the numbers for each CLI version. Going back to CLI
+       2.1.271 for a day is the quickest way to confirm it. If it holds, report it to the agent's
+       vendor with the output of `nerf-watch report` attached.
 
 WARN   codex  gpt-5.5  Reasoning effort dropped from high to medium after CLI 0.141.0
-       before    high (100% of sessions)     cli 0.140.0  2026-08-23 to 2026-09-09  n=8
-       after     medium (100% of sessions)   cli 0.141.0  2026-09-12 to 2026-10-02  n=16
+       before    high (100% of sessions)     cli 0.140.0   2026-08-23 to 2026-09-09   8 sessions
+       after     medium (100% of sessions)   cli 0.141.0   2026-09-12 to 2026-10-02   16 sessions
+       Next: If you want high, set it explicitly (model_reasoning_effort in ~/.codex/config.toml)
+       so a default change cannot lower it.
 
-WARN   codex  gpt-5.5  Context window shrank in the last 7 days with no CLI change (0.141.0)
-       before    353.4k             cli 0.141.0  2026-09-12 to 2026-09-23  n=240
-       after     258.4k             cli 0.141.0  2026-09-26 to 2026-10-02  n=240
+WARN   codex  gpt-5.5  Context window shrank in the 7 days to 2026-10-02 with no CLI change (0.141.0)
+       before    353.4k tokens      cli 0.141.0   2026-09-12 to 2026-09-23   240 turns
+       after     258.4k tokens      cli 0.141.0   2026-09-26 to 2026-10-02   240 turns
+       Next: Check model_context_window in ~/.codex/config.toml and in any profile you use. If you
+       did not change it, report it to the agent's vendor with the output of `nerf-watch report`
+       attached.
 
 2 alert(s), 3 warning(s), 0 info
+Share an anonymized summary with the open-agent-lab regression watch: nerf-watch share
 ```
 
-（后三条结果的解释文字已省略。）复现方法：
+（后三条结果的解释文字已省略。）在本仓库的克隆目录中复现：
 
 ```sh
 node scripts/make-demo-data.mjs /tmp/nw-demo
-nerf-watch check --root claude=/tmp/nw-demo/claude/projects --root codex=/tmp/nw-demo/codex/sessions
+npx nerf-watch check --root claude=/tmp/nw-demo/claude/projects --root codex=/tmp/nw-demo/codex/sessions
 ```
 
 ## 检测项
@@ -82,14 +98,14 @@ nerf-watch check --root claude=/tmp/nw-demo/claude/projects --root codex=/tmp/nw
 | 回答的模型 ID 无法识别，或看起来像内部模型 | `hidden-model` | 每一个实际服务的模型 ID | 出现即触发 | |
 | 默认推理强度下降 | `effort-drop` | 每个主线程会话启动时的推理强度，按 CLI 版本统计 | 任何下降 | |
 | 上下文窗口变小 | `contextWindow-shift`、`-drift` | 上报的窗口大小（Codex），或自动压缩时的 prompt 大小（Claude Code） | 缩小 10% | 缩小 40% |
-| 每轮未缓存的输入 token 暴涨 | `newInput-shift`、`-drift` | 各会话中位数的中位数 | 1.5 倍 | 2 倍 |
-| 每轮缓存创建 token 暴涨 | `cacheCreation-shift`、`-drift` | 各会话中位数的中位数 | 1.5 倍 | 2 倍 |
-| 会话启动 prompt 变大 | `firstTurnPrompt-shift` | 每个会话第一条主线程请求的 prompt 大小 | 1.3 倍 | 1.75 倍 |
+| 每轮未缓存的输入 token 暴涨 | `newInput-shift`、`-drift` | 各会话中位数的中位数 | 1.5 倍且至少多 500 token | 2 倍且至少多 500 token |
+| 每轮缓存创建 token 暴涨 | `cacheCreation-shift`、`-drift` | 各会话中位数的中位数 | 1.5 倍且至少多 500 token | 2 倍且至少多 500 token |
+| 会话启动 prompt 变大 | `firstTurnPrompt-shift` | 每个会话第一条主线程请求的 prompt 大小 | 1.3 倍且至少多 2,000 token | 1.75 倍且至少多 2,000 token |
 | 缓存命中率断崖式下跌 | `cacheHitRate-shift`、`-drift` | 命中缓存的 prompt token / 全部 prompt token | 下降 15 个百分点 | 下降 30 个百分点 |
 | 工具调用错误率上升 | `toolErrorRate-shift`、`-drift` | 失败的工具调用 / 全部工具调用 | 上升 5 个百分点且达到 1.5 倍 | 上升 10 个百分点且达到 2 倍 |
 | 智能体记录了一次模型回退（fallback） | `model-fallback` | fallback 事件 | 仅作提示（info） | |
 
-`-shift` 类结果在同一模型的 CLI 版本分界处触发。`-drift` 类结果把最近 7 天和之前的 28 天进行对比，两个时间窗口只使用同一 CLI 版本、同一模型的数据，因此变化不可能来自你自己安装的更新。
+`-shift` 类结果在同一模型的 CLI 版本分界处触发。`-drift` 类结果把你最近使用某个 CLI 版本和模型的 7 天与之前的 28 天进行对比，两个时间窗口只使用同一 CLI 版本、同一模型的数据，因此变化不可能来自你自己安装的更新。标题会写出最近窗口的结束日期，因为它结束于你最后一次使用该版本和模型的时间，不一定是今天。
 
 token 类和工具错误类检测，只有当变化在至少两个项目内部各自独立出现时才会触发（见[误报控制](#误报控制)）。如果你只在一个项目里使用某个智能体，这些检测不会报警。
 
@@ -111,7 +127,7 @@ token 类和工具错误类检测，只有当变化在至少两个项目内部�
 - **你自己选的推理强度不算默认值。** 推理强度按每个主线程会话启动时的级别统计，每个会话只计一次。`/effort` 或 `/model` 之后的轮次会被忽略；胜出的级别需要 3 个或更多会话、60% 的多数，并且两侧都要有来自两个工作负载的会话。
 - **切换模型不算不一致。** 当实际服务的模型发生变化，并且下一条模型身份记录确认了新模型时，两者之间的响应会被视为你主动切换的一部分。
 - **复制过来的历史记录会被丢弃。** 某些继续会话的方式会把旧记录复制到一个新文件里，并打上较新的 CLI 版本号。如果一条记录标着某个版本，但时间上却早于三个或更多更早版本的首次出现，就会被当作副本丢弃。
-- **上下文窗口是配置，不是样本。** 对比时不做工作负载控制，但每一侧至少需要 20 次上报。
+- **上下文窗口是配置，不是样本。** 对比时不做工作负载控制，但每一侧至少需要来自至少 3 个会话的 20 次上报，并且每个会话只计一次（取它最常见的窗口），因此单个很长或被恢复的会话无法决定结果。
 
 各智能体的细节：
 
@@ -149,7 +165,7 @@ npx nerf-watch share --open   # same, and open the link in your browser
 | Claude Code | `~/.claude/projects`、`~/.config/claude/projects` | `CLAUDE_CONFIG_DIR`（多个路径用逗号分隔），或 `--root claude=DIR` |
 | Codex | `~/.codex/sessions`、`~/.codex/archived_sessions` | `CODEX_HOME`，或 `--root codex=DIR` |
 
-路径在 macOS、Linux 和 Windows 上的解析方式相同（`%USERPROFILE%\.claude`、`%USERPROFILE%\.codex`）。
+路径在 macOS、Linux 和 Windows 上的解析方式相同（`%USERPROFILE%\.claude`、`%USERPROFILE%\.codex`）。`--root` 会替换该 agent 的默认目录，并且只读取你指定的 agent：单独使用 `--root claude=DIR` 时不会读取 Codex 日志。
 
 ## 命令参考
 

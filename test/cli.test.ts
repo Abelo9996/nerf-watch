@@ -48,6 +48,63 @@ describe("cli end to end on synthetic logs", () => {
     expect(ids).toEqual(["cacheCreation-shift", "cacheHitRate-shift", "contextWindow-drift", "effort-drop", "model-mismatch"]);
   });
 
+  it("check starts with a plain-English summary and labels units", () => {
+    const r = run(["check", ...roots]);
+    const lines = r.out.split("\n");
+    expect(lines[0]).toBe("Read 2,000 model responses from 56 session files (claude 1,280, codex 720), 2026-08-23 to 2026-10-02.");
+    expect(lines[1]).toMatch(/^Result: 2 alerts and 3 warnings\./);
+    expect(r.out).toMatch(/before\s+926 tokens\s+cli 2\.1\.270, 2\.1\.271\s+2026-08-23 to 2026-09-16\s+780 turns/);
+    expect(r.out).toMatch(/high \(100% of sessions\).*8 sessions/);
+    expect(r.out).toContain("Next: ");
+    expect(r.out).toContain("Context window shrank in the 7 days to 2026-10-02 with no CLI change (0.141.0)");
+    expect(r.out).not.toContain("last 7 days");
+  });
+
+  it("says when there is too little history to compare", () => {
+    const r = run(["check", "--since", "2026-09-29", roots[0], roots[1]]);
+    expect(r.out.split("\n")[1]).toMatch(/^Result: nothing to report, but there is not much history to compare yet/);
+  });
+
+  it("--root reads only the agents it names", () => {
+    const r = run(["scan", "--json", roots[0], roots[1]], { CODEX_HOME: join(dir, "logs", "codex") });
+    expect(JSON.parse(r.out).summary.files).toEqual({ claude: 32 });
+    const bad = run(["check", "--root", `claud=${dir}`]);
+    expect(bad.code).toBe(2);
+    expect(bad.err).toContain('unknown agent "claud"');
+  });
+
+  it("explains an empty --since window and a wrong --root folder", () => {
+    const since = run(["check", "--since", "2030-01-01", ...roots]);
+    expect(since.code).toBe(0);
+    expect(since.out).toMatch(/Found \d+ session file\(s\), but none have model responses since 2030-01-01/);
+    const missing = join(dir, "no-such-folder");
+    const home = tmp(); // so the folder is not printed relative to ~ (on Windows the temp dir is under the profile)
+    const typo = run(["check", "--root", `claude=${missing}`], { HOME: home, USERPROFILE: home });
+    expect(typo.out).toContain(`Looked in: ${missing}.`);
+  });
+
+  it("rejects bad numbers and output names before reading any logs", () => {
+    expect(run(["check", "--recent-days", "abc", ...roots]).err).toContain("--recent-days must be a whole number");
+    expect(run(["check", "--baseline-days", "0", ...roots]).code).toBe(2);
+    const out = run(["report", "--out", "x.txt", ...roots]);
+    expect(out.code).toBe(2);
+    expect(out.err).toContain('--out must end in .md or .json, got "x.txt"');
+  });
+
+  it("with no command prints help and where to start", () => {
+    const r = run([]);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("Start here: nerf-watch check");
+  });
+
+  it("share says why, what is shared and what to fill in", () => {
+    const r = run(["share", ...roots]);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("This is exactly what would be shared (5 finding(s)). Nothing has been sent");
+    expect(r.out).toContain('fill in "What you observed"');
+    expect(r.out).toContain("https://github.com/Abelo9996/open-agent-lab/issues/new?template=regression-report.yml");
+  });
+
   it("check respects --agent and --fail-on", () => {
     const codexOnly = run(["check", "--agent", "codex", ...roots]);
     expect(codexOnly.code).toBe(0); // codex findings are warnings only
@@ -87,6 +144,8 @@ describe("cli end to end on synthetic logs", () => {
     const r = run(["check"], { HOME: empty, USERPROFILE: empty, CLAUDE_CONFIG_DIR: join(empty, "c"), CODEX_HOME: join(empty, "x") });
     expect(r.code).toBe(0);
     expect(r.out).toContain("No Claude Code or Codex session logs found");
+    expect(r.out).toContain(join("x", "archived_sessions")); // shown as ~/x/archived_sessions
+    expect(r.out).toContain("--root claude=DIR");
     expect(run(["check", "--agent", "nope"]).code).toBe(2);
     expect(run(["scan", "--since", "whenever"]).code).toBe(2);
     expect(run(["frobnicate"]).code).toBe(2);

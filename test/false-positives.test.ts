@@ -422,11 +422,32 @@ describe("context window", () => {
     expect(detectTimeShifts(ds).filter((f) => f.id.startsWith("contextWindow"))).toEqual([]);
   });
 
-  it("reports a shrink inside one long session, since the window does not depend on the work", () => {
+  it("ignores a shrink seen in only one session per side, however long", () => {
+    // Seen on real logs: two Codex sessions, one resumed with a different window, read as a provider-side shrink.
     const ds = build([
       { version: "0.1.0", day: 0, sessions: 1, turnsPerSession: 200, contextWindow: 353400 },
       { version: "0.1.0", day: 23, sessions: 1, turnsPerSession: 60, contextWindow: 258400 },
     ]);
-    expect(detectTimeShifts(ds).find((f) => f.id === "contextWindow-drift")?.severity).toBe("warn");
+    expect(detectTimeShifts(ds).filter((f) => f.id.startsWith("contextWindow"))).toEqual([]);
+  });
+
+  it("does not let one long session outvote the others", () => {
+    const ds = build([
+      { version: "0.1.0", day: 0, sessions: 4, turnsPerSession: 10, contextWindow: 353400 },
+      { version: "0.1.0", day: 23, sessions: 3, turnsPerSession: 10, contextWindow: 353400 },
+      { version: "0.1.0", day: 24, sessions: 1, turnsPerSession: 200, contextWindow: 258400 },
+    ]);
+    expect(detectTimeShifts(ds).filter((f) => f.id.startsWith("contextWindow"))).toEqual([]);
+  });
+
+  it("reports a shrink seen in several sessions on each side", () => {
+    const ds = build([
+      { version: "0.1.0", day: 0, sessions: 3, turnsPerSession: 10, contextWindow: 353400 },
+      { version: "0.1.0", day: 23, sessions: 3, turnsPerSession: 10, contextWindow: 258400 },
+    ]);
+    const f = detectTimeShifts(ds).find((x) => x.id === "contextWindow-drift");
+    expect(f?.severity).toBe("warn");
+    expect(f?.evidence.map((e) => e.sampleUnit)).toEqual(["turns", "turns"]);
+    expect(f?.nextStep).toBeTruthy();
   });
 });

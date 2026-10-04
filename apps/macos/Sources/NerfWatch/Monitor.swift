@@ -124,28 +124,26 @@ final class Monitor: ObservableObject {
         }
         StatusItemAccess.update(tooltip: statusDescription)
 
-        let client: CLIClient
         switch await makeClient() {
         case .failure(let f):
+            // Node.js missing or a bad CLI path: shown in the menu with what to do.
             phase = .failed(f)
-            return
-        case .success(let c):
-            client = c
-        }
-        let outcome = await client.check()
-        lastChecked = Date()
-        switch outcome {
-        case .result(let r):
-            phase = .result(r)
-            // Only successful runs move the baseline for "new" alerts.
-            let fresh = store.record(r)
-            if AppSettings.notifyOnNewAlerts, let n = Formatting.notification(for: fresh) {
-                notifier.post(title: n.title, body: n.body)
+        case .success(let client):
+            let outcome = await client.check()
+            lastChecked = Date()
+            switch outcome {
+            case .result(let r):
+                phase = .result(r)
+                // Only successful runs move the baseline for "new" alerts.
+                let fresh = store.record(r)
+                if AppSettings.notifyOnNewAlerts, let n = Formatting.notification(for: fresh) {
+                    notifier.post(title: n.title, body: n.body)
+                }
+            case .noData(let m):
+                phase = .noData(m)
+            case .failure(let f):
+                phase = .failed(f)
             }
-        case .noData(let m):
-            phase = .noData(m)
-        case .failure(let f):
-            phase = .failed(f)
         }
         if !openedForDemo, ProcessInfo.processInfo.environment["NERF_WATCH_OPEN_MENU"] == "1" {
             // Demo and screenshot hook: open the menu once the first result is in.

@@ -28,11 +28,11 @@ public enum CheckFailure: Sendable, Equatable, Error {
         case .nodeMissing:
             return "Node.js was not found. nerf-watch needs Node.js 20 or newer, or set the CLI path in Settings."
         case .cliNotFound(let path):
-            return "The nerf-watch CLI set in Settings was not found or is not executable: \(path)"
+            return "The nerf-watch CLI set in Settings (or NERF_WATCH_CLI) was not found or is not executable: \(path). Fix the path, or clear it to find nerf-watch automatically."
         case .timedOut(let seconds):
-            return "nerf-watch did not finish within \(seconds) seconds."
+            return "nerf-watch did not finish within \(seconds) seconds. The first run downloads it with npx, which needs a network connection; npm install -g nerf-watch avoids that."
         case .usage(let message):
-            return "nerf-watch rejected the options: \(message)"
+            return "nerf-watch rejected the options: \(message). Check the log folders in Settings."
         case .failed(let message):
             return message
         }

@@ -1,3 +1,4 @@
+import { MIN } from "./metrics.js";
 import type { Dataset, Finding, Segment, Severity } from "./types.js";
 
 const useColor = () => !!process.stdout.isTTY && !process.env.NO_COLOR && process.env.TERM !== "dumb";
@@ -105,12 +106,82 @@ function wrap(text: string, width: number, indent: string): string {
 export function formatFinding(f: Finding): string {
   const head = `${severityLabel(f.severity)}  ${f.agent}  ${f.model ?? ""}  ${bold(f.title)}`;
   const w = Math.max(16, ...f.evidence.map((e) => e.display.length)) + 2;
-  const ev = f.evidence.map((e) => {
+  const cols = f.evidence.map((e) => {
     const v = e.versions?.length ? (e.versions.length > 2 ? `${e.versions[0]} to ${e.versions[e.versions.length - 1]}` : e.versions.join(", ")) : "";
-    const when = e.from ? `${e.from} to ${e.to}` : "";
-    return `       ${e.label.padEnd(9)} ${e.display.padEnd(w)} ${dim(`cli ${v}  ${when}  n=${fmtInt(e.samples)}`)}`;
+    return {
+      cli: v ? `cli ${v}` : "",
+      when: e.from ? (e.from === e.to ? e.from : `${e.from} to ${e.to}`) : "",
+      n: countWithUnit(e.samples, e.sampleUnit ?? "samples"),
+    };
   });
-  return [head, ...ev, wrap(f.explanation, 92, "       ")].join("\n");
+  const cw = Math.max(0, ...cols.map((c) => c.cli.length));
+  const ww = Math.max(0, ...cols.map((c) => c.when.length));
+  const ev = f.evidence.map((e, i) => {
+    const c = cols[i];
+    const meta = [cw ? c.cli.padEnd(cw) : "", ww ? c.when.padEnd(ww) : "", c.n].filter(Boolean).join("   ");
+    return `       ${e.label.padEnd(9)} ${e.display.padEnd(w)} ${dim(meta)}`;
+  });
+  const lines = [head, ...ev, wrap(f.explanation, 92, "       ")];
+  if (f.nextStep) lines.push(wrap(`Next: ${f.nextStep}`, 92, "       "));
+  return lines.join("\n");
+}
+
+/** "1 turn", "1,280 turns", "1 tool call". */
+export function countWithUnit(n: number, unit: string): string {
+  return `${fmtInt(n)} ${Math.round(n) === 1 && unit.endsWith("s") ? unit.slice(0, -1) : unit}`;
+}
+
+/** "2 alerts and 3 warnings", "1 warning", "no changes". */
+function countPhrase(c: Record<Severity, number>): string {
+  const parts: string[] = [];
+  if (c.alert) parts.push(`${c.alert} alert${c.alert === 1 ? "" : "s"}`);
+  if (c.warn) parts.push(`${c.warn} warning${c.warn === 1 ? "" : "s"}`);
+  return parts.join(" and ");
+}
+
+/**
+ * The plain-English lines printed above the findings: what was read, and the
+ * verdict in one sentence.
+ */
+export function checkHeadline(ds: Dataset, findings: Finding[]): string[] {
+  const agents = Object.keys(ds.files).filter((a) => ds.files[a] > 0);
+  // Files that contributed at least one response (the --since filter goes by file time, which can keep extra files).
+  const files = new Set(ds.turns.map((t) => t.sessionKey)).size;
+  const per = agents.map((a) => `${a} ${fmtInt(ds.turns.filter((t) => t.agent === a).length)}`).join(", ");
+  const range = ds.turns.length ? `, ${isoDate(ds.turns[0].timestamp)} to ${isoDate(ds.turns[ds.turns.length - 1].timestamp)}` : "";
+  const read = `Read ${fmtInt(ds.turns.length)} model responses from ${fmtInt(files)} session files (${per})${range}.`;
+  const c = countBySeverity(findings);
+  let verdict: string;
+  if (c.alert || c.warn) {
+    verdict =
+      `Result: ${countPhrase(c)}. ` +
+      (c.alert ? "Alerts are large or clear-cut changes; warnings are smaller ones worth a look." : "A warning is worth a look, not proof of a regression.");
+  } else {
+    const notes = c.info ? ` ${c.info} note${c.info === 1 ? "" : "s"} below for context.` : "";
+    verdict = tooLittleHistory(ds)
+      ? "Result: nothing to report, but there is not much history to compare yet. A comparison needs at least 5 sessions and " +
+        "50 turns on the same model on each side (before and after a CLI update, or older and recent). Run it again after more sessions." +
+        notes
+      : `Result: no changes crossed a threshold.${notes || " Nothing to do."}`;
+  }
+  return [read, verdict];
+}
+
+/**
+ * True when no (agent, model) has enough main-thread history for even one
+ * comparison: at least twice the per-side minimum of turns and sessions.
+ */
+export function tooLittleHistory(ds: Dataset): boolean {
+  const groups = new Map<string, { turns: number; sessions: Set<string> }>();
+  for (const t of ds.turns) {
+    if (t.sidechain || t.firstInSession) continue;
+    const k = `${t.agent}\u0000${t.servedModel ?? t.requestedModel ?? ""}`;
+    const g = groups.get(k) ?? { turns: 0, sessions: new Set<string>() };
+    g.turns++;
+    g.sessions.add(t.sessionKey);
+    groups.set(k, g);
+  }
+  return ![...groups.values()].some((g) => g.turns >= 2 * MIN.turns && g.sessions.size >= 2 * MIN.sessions);
 }
 
 export function countBySeverity(fs: Finding[]): Record<Severity, number> {

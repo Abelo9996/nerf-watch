@@ -1,16 +1,18 @@
 #!/usr/bin/env node
 import { writeFileSync } from "node:fs";
-import { extname } from "node:path";
+import { homedir } from "node:os";
+import { extname, sep } from "node:path";
 import { cac } from "cac";
 import { adapters } from "./adapters/index.js";
 import { runDetectors } from "./detectors.js";
-import { bold, countBySeverity, datasetSummary, dim, formatFinding, SEGMENT_ALIGN, SEGMENT_HEADERS, segmentRows, table } from "./format.js";
+import { bold, checkHeadline, countBySeverity, datasetSummary, dim, formatFinding, SEGMENT_ALIGN, SEGMENT_HEADERS, segmentRows, table } from "./format.js";
 import { loadDataset } from "./load.js";
 import { buildSegments } from "./metrics.js";
 import { buildReport, reportToMarkdown, toolVersion } from "./report.js";
 import { buildSharePayload, localIdentifiers, openInBrowser, scanPayload, shareLink, type SharePayload } from "./share.js";
 import type { Severity } from "./types.js";
-import { parseAgents, parseRoots, parseSince, UsageError } from "./options.js";
+import { parseAgents, parsePositiveInt, parseRoots, parseSince, UsageError } from "./options.js";
+import type { Dataset } from "./types.js";
 
 interface Common {
   since?: string;
@@ -20,14 +22,45 @@ interface Common {
 }
 
 async function load(o: Common) {
-  return loadDataset({ since: parseSince(o.since), agents: parseAgents(o.agent), roots: parseRoots(o.root) });
+  const roots = parseRoots(o.root);
+  // --root claude=DIR means "read these Claude Code logs", not "these plus every other agent's defaults".
+  const agents = parseAgents(o.agent) ?? (roots ? Object.keys(roots) : undefined);
+  return loadDataset({ since: parseSince(o.since), agents, roots });
 }
 
-function noData(json: boolean | undefined): void {
-  const msg =
-    "No Claude Code or Codex session logs found. Looked in ~/.claude/projects, ~/.config/claude/projects and ~/.codex/sessions " +
-    "(override with CLAUDE_CONFIG_DIR, CODEX_HOME or --root agent=dir).";
-  if (json) console.log(JSON.stringify({ error: "no-data", message: msg }));
+/** Home directory shown as ~ so the message stays short. */
+function tilde(p: string): string {
+  const h = homedir();
+  return h && (p === h || p.startsWith(h + sep)) ? "~" + p.slice(h.length) : p;
+}
+
+/** Why there is nothing to analyze, and what to do about it. */
+export function noDataMessage(ds: Dataset, since?: string): string {
+  const found = Object.values(ds.filesFound ?? {}).reduce((a, b) => a + b, 0);
+  const kept = Object.values(ds.files).reduce((a, b) => a + b, 0);
+  if (found > 0 && since !== undefined) {
+    return (
+      `Found ${found.toLocaleString("en-US")} session file(s), but none have model responses since ${since}. ` +
+      "Try a longer --since (for example --since 30d) or leave it out."
+    );
+  }
+  if (found > 0 || kept > 0) {
+    return (
+      `Found ${found.toLocaleString("en-US")} session file(s), but none of them contain model responses with token counts. ` +
+      "If these are Claude Code or Codex logs, the log format may have changed: please open an issue at https://github.com/Abelo9996/nerf-watch/issues."
+    );
+  }
+  const dirs = Object.values(ds.roots ?? {}).flat().map(tilde);
+  return (
+    `No Claude Code or Codex session logs found. Looked in: ${dirs.join(", ") || "(no folders)"}. ` +
+    "Use Claude Code or Codex for a few sessions first, or point nerf-watch at your logs with --root claude=DIR or --root codex=DIR " +
+    "(or set CLAUDE_CONFIG_DIR or CODEX_HOME)."
+  );
+}
+
+function noData(ds: Dataset, o: Common): void {
+  const msg = noDataMessage(ds, o.since);
+  if (o.json) console.log(JSON.stringify({ error: "no-data", message: msg }));
   else console.log(msg);
 }
 
@@ -41,7 +74,7 @@ interface ShareOpts extends Common {
  */
 async function share(o: ShareOpts): Promise<void> {
   const ds = await load(o);
-  if (!ds.turns.length) return noData(o.json);
+  if (!ds.turns.length) return noData(ds, o);
   const ids = localIdentifiers();
   const payload: SharePayload = buildSharePayload(ds, runDetectors(ds), ids);
   const problems = scanPayload(payload, ids);
@@ -62,6 +95,13 @@ async function share(o: ShareOpts): Promise<void> {
   if (o.json) {
     console.log(JSON.stringify({ payload, url: link.url, reportPrefilled: link.reportPrefilled }, null, 2));
   } else {
+    console.log(
+      dim(
+        "The open-agent-lab regression watch collects anonymized findings from many users, so a change that hits many people " +
+          "shows up as many matching reports instead of one anecdote.",
+      ),
+    );
+    console.log("");
     console.log(bold(`This is exactly what would be shared (${payload.findings.length} finding(s)). Nothing has been sent:`));
     console.log("");
     console.log(link.json);
@@ -84,6 +124,13 @@ async function share(o: ShareOpts): Promise<void> {
       );
     }
     console.log(link.url);
+    console.log("");
+    console.log(
+      dim(
+        'On the form, fill in "What you observed" (required: what changed for you, and anything you changed yourself around then) ' +
+          "and tick the two checkboxes. The issue is public.",
+      ),
+    );
   }
   if (o.open) {
     if (openInBrowser(link.url)) console.error(dim("Opened the form in your browser."));
@@ -110,7 +157,7 @@ export function buildCli() {
       console.log(JSON.stringify({ summary: { files: ds.files, turns: ds.turns.length, toolCalls: ds.toolResults.length, badLines: ds.badLines }, segments: segs }, null, 2));
       return;
     }
-    if (!ds.turns.length) return noData(false);
+    if (!ds.turns.length) return noData(ds, { ...o, json: false });
     console.log(dim(datasetSummary(ds)));
     console.log("");
     console.log(table(SEGMENT_HEADERS, segmentRows(segs), SEGMENT_ALIGN));
@@ -129,16 +176,19 @@ export function buildCli() {
     .option("--baseline-days <n>", "Baseline window before the recent window", { default: 28 })
     .action(async (o: Common & { failOn: string; recentDays: number; baselineDays: number }) => {
       if (!["alert", "warn", "never"].includes(o.failOn)) throw new UsageError(`--fail-on must be alert, warn or never`);
+      const recentDays = parsePositiveInt("--recent-days", o.recentDays);
+      const baselineDays = parsePositiveInt("--baseline-days", o.baselineDays);
       const ds = await load(o);
-      if (!ds.turns.length) return noData(o.json);
-      const findings = runDetectors(ds, { recentDays: Number(o.recentDays), baselineDays: Number(o.baselineDays) });
+      if (!ds.turns.length) return noData(ds, o);
+      const findings = runDetectors(ds, { recentDays, baselineDays });
       const counts = countBySeverity(findings);
       if (o.json) {
         console.log(JSON.stringify({ summary: counts, findings }, null, 2));
       } else {
-        console.log(dim(datasetSummary(ds)));
+        const [read, verdict] = checkHeadline(ds, findings);
+        console.log(read);
+        console.log(bold(verdict));
         console.log("");
-        if (!findings.length) console.log("No changes crossed a threshold.");
         for (const f of findings) {
           console.log(formatFinding(f));
           console.log("");
@@ -160,15 +210,15 @@ export function buildCli() {
     .option("--open", "With --share, open the link in your browser")
     .action(async (o: Common & { out: string; share?: boolean; open?: boolean }) => {
       if (o.share) return share(o);
+      const ext = extname(String(o.out)).toLowerCase();
+      if (!o.json && ext !== ".md" && ext !== ".json") throw new UsageError(`--out must end in .md or .json, got "${o.out}"`);
       const ds = await load(o);
-      if (!ds.turns.length) return noData(o.json);
+      if (!ds.turns.length) return noData(ds, o);
       const r = buildReport(ds, runDetectors(ds));
       if (o.json) {
         console.log(JSON.stringify(r, null, 2));
         return;
       }
-      const ext = extname(o.out).toLowerCase();
-      if (ext !== ".md" && ext !== ".json") throw new UsageError(`--out must end in .md or .json`);
       writeFileSync(o.out, ext === ".json" ? JSON.stringify(r, null, 2) + "\n" : reportToMarkdown(r));
       console.log(`Wrote ${o.out} (${r.findings.length} finding(s)). Review it before sharing; it contains only aggregate numbers, versions, model ids and dates.`);
     });
@@ -186,6 +236,7 @@ async function main() {
       if (cli.options.help || cli.options.version) return;
       if (cli.args.length) throw new UsageError(`Unknown command "${cli.args[0]}". Try: nerf-watch --help`);
       cli.outputHelp();
+      console.log("Start here: nerf-watch check   (reads your local Claude Code and Codex logs; nothing is uploaded)");
       return;
     }
     await cli.runMatchedCommand();

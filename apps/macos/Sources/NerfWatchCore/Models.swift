@@ -37,20 +37,23 @@ public struct Evidence: Sendable, Codable, Equatable, Hashable {
     public var from: String?
     public var to: String?
     public var samples: Double?
+    /// What `samples` counts ("turns", "sessions", "tool calls"). Older CLIs omit it.
+    public var sampleUnit: String?
     public var value: Double?
     public var display: String
 
-    public init(label: String, versions: [String]? = nil, from: String? = nil, to: String? = nil, samples: Double? = nil, value: Double? = nil, display: String) {
+    public init(label: String, versions: [String]? = nil, from: String? = nil, to: String? = nil, samples: Double? = nil, sampleUnit: String? = nil, value: Double? = nil, display: String) {
         self.label = label
         self.versions = versions
         self.from = from
         self.to = to
         self.samples = samples
+        self.sampleUnit = sampleUnit
         self.value = value
         self.display = display
     }
 
-    private enum CodingKeys: String, CodingKey { case label, versions, from, to, samples, value, display }
+    private enum CodingKeys: String, CodingKey { case label, versions, from, to, samples, sampleUnit, value, display }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -59,6 +62,7 @@ public struct Evidence: Sendable, Codable, Equatable, Hashable {
         from = try? c.decodeIfPresent(String.self, forKey: .from)
         to = try? c.decodeIfPresent(String.self, forKey: .to)
         samples = try? c.decodeIfPresent(Double.self, forKey: .samples)
+        sampleUnit = try? c.decodeIfPresent(String.self, forKey: .sampleUnit)
         value = try? c.decodeIfPresent(Double.self, forKey: .value)
         display = (try? c.decode(String.self, forKey: .display)) ?? ""
     }
@@ -75,10 +79,12 @@ public struct Finding: Sendable, Codable, Equatable, Hashable, Identifiable {
     public var title: String
     public var explanation: String
     public var evidence: [Evidence]
+    /// What to check or do next. Older CLIs omit it.
+    public var nextStep: String?
     /// "version", "time" or "event".
     public var trigger: String
 
-    public init(detector: String, severity: Severity, agent: String, model: String? = nil, title: String, explanation: String = "", evidence: [Evidence] = [], trigger: String) {
+    public init(detector: String, severity: Severity, agent: String, model: String? = nil, title: String, explanation: String = "", evidence: [Evidence] = [], nextStep: String? = nil, trigger: String) {
         self.detector = detector
         self.severity = severity
         self.agent = agent
@@ -86,12 +92,13 @@ public struct Finding: Sendable, Codable, Equatable, Hashable, Identifiable {
         self.title = title
         self.explanation = explanation
         self.evidence = evidence
+        self.nextStep = nextStep
         self.trigger = trigger
     }
 
     private enum CodingKeys: String, CodingKey {
         case detector = "id"
-        case severity, agent, model, title, explanation, evidence, trigger
+        case severity, agent, model, title, explanation, evidence, nextStep, trigger
     }
 
     public init(from decoder: Decoder) throws {
@@ -103,6 +110,7 @@ public struct Finding: Sendable, Codable, Equatable, Hashable, Identifiable {
         title = (try? c.decode(String.self, forKey: .title)) ?? detector
         explanation = (try? c.decode(String.self, forKey: .explanation)) ?? ""
         evidence = (try? c.decode([Evidence].self, forKey: .evidence)) ?? []
+        nextStep = try? c.decodeIfPresent(String.self, forKey: .nextStep)
         trigger = (try? c.decode(String.self, forKey: .trigger)) ?? "event"
     }
 

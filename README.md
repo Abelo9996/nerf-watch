@@ -20,7 +20,7 @@ Requires Node.js 20 or newer.
 npx nerf-watch check
 ```
 
-That reads every Claude Code and Codex session on the machine, prints what changed, and exits with status 1 if any alert fired. Other commands:
+That reads every Claude Code and Codex session on the machine and prints a one-line verdict, then each finding: what changed, the numbers before and after with how much data they rest on, and what to do next. It exits with status 1 if any alert fired. With no logs, or too little history to compare, it says so and what to do. Other commands:
 
 ```sh
 npx nerf-watch scan                          # baselines per CLI version and model
@@ -34,44 +34,60 @@ npx nerf-watch share                         # contribute findings to the public
 Output from `nerf-watch check` on the synthetic logs in `scripts/make-demo-data.mjs` (no real data):
 
 ```text
-claude: 32 session files, 1,280 turns; codex: 24 session files, 720 turns, 2026-08-23 to 2026-10-02
+Read 2,000 model responses from 56 session files (claude 1,280, codex 720), 2026-08-23 to 2026-10-02.
+Result: 2 alerts and 3 warnings. Alerts are large or clear-cut changes; warnings are smaller ones worth a look.
 
 ALERT  claude  claude-sonnet-5  Requested claude-opus-5 but claude-sonnet-5 answered
-       requested claude-opus-5                 cli 2.1.272  2026-09-18 to 2026-09-28  n=1,280
-       served    claude-sonnet-5 (120 turns)   cli 2.1.272  2026-09-18 to 2026-09-28  n=120
+       requested claude-opus-5                     cli 2.1.270 to 2.1.272   2026-08-23 to 2026-10-01   1,280 turns
+       served    claude-sonnet-5 (9.4% of turns)   cli 2.1.272              2026-09-18 to 2026-09-28   120 turns
        120 of 1,280 main-thread API responses (9.4%) for sessions configured to use claude-opus-5
        were served by claude-sonnet-5. If you switched models mid-session or use a mode that routes
        some turns to another model on purpose, this is expected. Otherwise you got a different
        model than you chose.
+       Next: If you did not switch models or turn on a mode that routes some turns to another
+       model, report it to the agent's vendor with the output of `nerf-watch report` attached.
 
 ALERT  claude  claude-opus-5  Cache-creation tokens per turn jumped after CLI 2.1.272
-       before    926                cli 2.1.270, 2.1.271  2026-08-23 to 2026-09-16  n=780
-       after     3,037              cli 2.1.272  2026-09-19 to 2026-10-01  n=351
-       Median cache writes per API call went from 926 to 3,037. Cache writes are billed above the
-       normal input price. A jump usually means the cached prefix is being invalidated and rebuilt
-       more often. The change shows up in 3 of 3 separate workloads (projects) that have enough
-       data on both sides, so it is not explained by a change in what you worked on.
+       before    926 tokens         cli 2.1.270, 2.1.271   2026-08-23 to 2026-09-16   780 turns
+       after     3,037 tokens       cli 2.1.272            2026-09-19 to 2026-10-01   351 turns
+       Median cache writes per API call went from 926 tokens to 3,037 tokens. Cache writes are
+       billed above the normal input price. A jump usually means the cached prefix is being
+       invalidated and rebuilt more often. The change shows up in 3 of 3 separate workloads
+       (projects) that have enough data on both sides, so it is not explained by a change in what
+       you worked on.
+       Next: Run `nerf-watch scan` to see the numbers for each CLI version. Going back to CLI
+       2.1.271 for a day is the quickest way to confirm it. If it holds, report it to the agent's
+       vendor with the output of `nerf-watch report` attached.
 
 WARN   claude  claude-opus-5  Cache hit rate collapsed after CLI 2.1.272
-       before    97.8%              cli 2.1.270, 2.1.271  2026-08-23 to 2026-09-16  n=780
-       after     80.2%              cli 2.1.272  2026-09-19 to 2026-10-01  n=351
+       before    97.8%              cli 2.1.270, 2.1.271   2026-08-23 to 2026-09-16   780 turns
+       after     80.2%              cli 2.1.272            2026-09-19 to 2026-10-01   351 turns
+       Next: Run `nerf-watch scan` to see the numbers for each CLI version. Going back to CLI
+       2.1.271 for a day is the quickest way to confirm it. If it holds, report it to the agent's
+       vendor with the output of `nerf-watch report` attached.
 
 WARN   codex  gpt-5.5  Reasoning effort dropped from high to medium after CLI 0.141.0
-       before    high (100% of sessions)     cli 0.140.0  2026-08-23 to 2026-09-09  n=8
-       after     medium (100% of sessions)   cli 0.141.0  2026-09-12 to 2026-10-02  n=16
+       before    high (100% of sessions)     cli 0.140.0   2026-08-23 to 2026-09-09   8 sessions
+       after     medium (100% of sessions)   cli 0.141.0   2026-09-12 to 2026-10-02   16 sessions
+       Next: If you want high, set it explicitly (model_reasoning_effort in ~/.codex/config.toml)
+       so a default change cannot lower it.
 
-WARN   codex  gpt-5.5  Context window shrank in the last 7 days with no CLI change (0.141.0)
-       before    353.4k             cli 0.141.0  2026-09-12 to 2026-09-23  n=240
-       after     258.4k             cli 0.141.0  2026-09-26 to 2026-10-02  n=240
+WARN   codex  gpt-5.5  Context window shrank in the 7 days to 2026-10-02 with no CLI change (0.141.0)
+       before    353.4k tokens      cli 0.141.0   2026-09-12 to 2026-09-23   240 turns
+       after     258.4k tokens      cli 0.141.0   2026-09-26 to 2026-10-02   240 turns
+       Next: Check model_context_window in ~/.codex/config.toml and in any profile you use. If you
+       did not change it, report it to the agent's vendor with the output of `nerf-watch report`
+       attached.
 
 2 alert(s), 3 warning(s), 0 info
+Share an anonymized summary with the open-agent-lab regression watch: nerf-watch share
 ```
 
-(Explanations trimmed for the last three findings.) To reproduce it:
+(Explanations trimmed for the last three findings.) To reproduce it from a clone of this repository:
 
 ```sh
 node scripts/make-demo-data.mjs /tmp/nw-demo
-nerf-watch check --root claude=/tmp/nw-demo/claude/projects --root codex=/tmp/nw-demo/codex/sessions
+npx nerf-watch check --root claude=/tmp/nw-demo/claude/projects --root codex=/tmp/nw-demo/codex/sessions
 ```
 
 ## Menu bar app (macOS)
@@ -90,7 +106,7 @@ A small status light for the menu bar. It runs `nerf-watch check --json` every 3
 | red octagon | alerts |
 | grey dashed circle | not checked yet, no logs found, or the check failed |
 
-Each state has its own shape, and the menu, tooltip and VoiceOver label say it in words. The menu lists every finding (severity, agent, model, title, CLI version range); click one for the before and after numbers. It also has Check now, Copy anonymized report (`report --json` to the clipboard), Settings (interval, CLI path, log folders, launch at login) and Quit. When an alert appears that was not there on the previous run, you get a macOS notification.
+Each state has its own shape, and the menu, tooltip and VoiceOver label say it in words. The menu lists every finding (severity, agent, model, title, CLI version range); click one for the before and after numbers, how much data they rest on, and what to do next. It also has Check now, Copy anonymized report (`report --json` to the clipboard), Settings (interval, CLI path, log folders, launch at login) and Quit. When an alert appears that was not there on the previous run, you get a macOS notification.
 
 Install:
 
@@ -122,14 +138,14 @@ NERF_WATCH_ROOTS="claude=/tmp/nw-demo/claude/projects,codex=/tmp/nw-demo/codex/s
 | Unrecognized or internal-looking model id answered | `hidden-model` | every served model id | any | |
 | Default reasoning effort dropped | `effort-drop` | effort each main-thread session started with, per CLI version | any drop | |
 | Context window shrank | `contextWindow-shift`, `-drift` | reported window (Codex) or prompt size at auto-compaction (Claude Code) | 10% smaller | 40% smaller |
-| Uncached input tokens per turn jumped | `newInput-shift`, `-drift` | median of per-session medians | 1.5x | 2x |
-| Cache-creation tokens per turn jumped | `cacheCreation-shift`, `-drift` | median of per-session medians | 1.5x | 2x |
-| Session startup prompt grew | `firstTurnPrompt-shift` | prompt size of each session's first main-thread request | 1.3x | 1.75x |
+| Uncached input tokens per turn jumped | `newInput-shift`, `-drift` | median of per-session medians | 1.5x and +500 tokens | 2x and +500 tokens |
+| Cache-creation tokens per turn jumped | `cacheCreation-shift`, `-drift` | median of per-session medians | 1.5x and +500 tokens | 2x and +500 tokens |
+| Session startup prompt grew | `firstTurnPrompt-shift` | prompt size of each session's first main-thread request | 1.3x and +2,000 tokens | 1.75x and +2,000 tokens |
 | Cache hit rate collapsed | `cacheHitRate-shift`, `-drift` | cached prompt tokens / all prompt tokens | 15 points | 30 points |
 | Tool call error rate jumped | `toolErrorRate-shift`, `-drift` | failed tool calls / all tool calls | +5 points and 1.5x | +10 points and 2x |
 | Agent recorded a model fallback | `model-fallback` | fallback events | info only | |
 
-`-shift` findings fire at a CLI version boundary for the same model. `-drift` findings compare the last 7 days with the 28 days before, using only the same CLI version and model in both windows, so the change cannot come from an update you installed.
+`-shift` findings fire at a CLI version boundary for the same model. `-drift` findings compare the last 7 days in which you used a CLI version and model with the 28 days before, using only that version and model in both windows, so the change cannot come from an update you installed. The title names the date the recent window ends, because it ends at your last use of that version and model, which may not be today.
 
 Token and tool error checks only fire when the change also shows up inside at least two of your projects on their own (see [Controls for false positives](#controls-for-false-positives)). If you only use an agent in one project, those checks stay quiet.
 
@@ -151,7 +167,7 @@ Most of what changes in your logs is your own work, not the agent. These control
 - **Effort you chose is not a default.** Effort is counted once per main-thread session, by the level the session started with. Turns after `/effort` or `/model` are ignored, and the winning level needs 3 or more sessions, a 60% majority, and sessions from two workloads on both sides.
 - **Model switches are not mismatches.** When the served model changes and the next model identity record confirms the new model, the responses in between are treated as part of your switch.
 - **Copied history is dropped.** Some ways of continuing a session copy old records into a new file stamped with the newer CLI version. Records whose version stamp is older than the first sighting of three or more earlier versions are dropped as copies.
-- **Context windows are settings, not samples.** They are compared without workload controls, but each side needs at least 20 reports.
+- **Context windows are settings, not samples.** They are compared without workload controls, but each side needs at least 20 reports from at least 3 sessions, and each session counts once (by its most common window), so one long or resumed session cannot decide the result.
 
 Details per agent:
 
@@ -189,7 +205,7 @@ nerf-watch makes no network request in any of this. `--open` launches your brows
 | Claude Code | `~/.claude/projects`, `~/.config/claude/projects` | `CLAUDE_CONFIG_DIR` (comma separated for several), or `--root claude=DIR` |
 | Codex | `~/.codex/sessions`, `~/.codex/archived_sessions` | `CODEX_HOME`, or `--root codex=DIR` |
 
-Paths resolve the same way on macOS, Linux and Windows (`%USERPROFILE%\.claude`, `%USERPROFILE%\.codex`).
+Paths resolve the same way on macOS, Linux and Windows (`%USERPROFILE%\.claude`, `%USERPROFILE%\.codex`). `--root` replaces the default folders for that agent and limits the run to the agents you name: `--root claude=DIR` on its own reads no Codex logs.
 
 ## Command reference
 

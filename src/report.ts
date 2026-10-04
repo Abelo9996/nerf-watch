@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { buildSegments, compareVersions } from "./metrics.js";
-import { countBySeverity, fmtInt, isoDate, SEGMENT_ALIGN, SEGMENT_HEADERS, segmentRows, table } from "./format.js";
+import { countBySeverity, countWithUnit, fmtInt, isoDate, SEGMENT_ALIGN, SEGMENT_HEADERS, segmentRows, table } from "./format.js";
 import type { Dataset, Finding, Segment } from "./types.js";
 
 export function toolVersion(): string {
@@ -64,6 +64,7 @@ export function buildReport(ds: Dataset, findings: Finding[]): Report {
         [key]: clean,
         title: swap(out.title),
         explanation: swap(out.explanation),
+        ...(out.nextStep ? { nextStep: swap(out.nextStep) } : {}),
         evidence: out.evidence.map((e) => ({ ...e, display: swap(e.display) })),
       };
     }
@@ -117,9 +118,13 @@ export function reportToMarkdown(r: Report): string {
     out.push(`| | value | CLI versions | dates | samples |`);
     out.push(`|---|---|---|---|---:|`);
     for (const e of f.evidence) {
-      out.push(`| ${e.label} | ${e.display} | ${(e.versions ?? []).join(", ")} | ${e.from ?? ""} to ${e.to ?? ""} | ${fmtInt(e.samples)} |`);
+      out.push(`| ${e.label} | ${e.display} | ${(e.versions ?? []).join(", ")} | ${e.from ?? ""} to ${e.to ?? ""} | ${countWithUnit(e.samples, e.sampleUnit ?? "samples")} |`);
     }
     out.push("");
+    if (f.nextStep) {
+      out.push(`Next: ${f.nextStep}`);
+      out.push("");
+    }
   }
   out.push(`## Baselines per (agent, CLI version, model)`);
   out.push("");

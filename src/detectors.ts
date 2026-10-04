@@ -38,6 +38,28 @@ interface Rule {
   judge(before: number, after: number): Severity | null;
   title(agent: string, model: string, where: string): string;
   explain(before: string, after: string): string;
+  /** What to do next. `ctx.before` is the last CLI version before the change, if there is one. */
+  next(ctx: NextContext): string;
+}
+
+interface NextContext {
+  agent: string;
+  trigger: "version" | "time";
+  /** Last CLI version on the before side (version shifts only). */
+  before?: string;
+  /** First date on the after side. */
+  since?: string;
+}
+
+const REPORT_IT = "report it to the agent's vendor with the output of `nerf-watch report` attached";
+
+/** Next step for token and cache findings. */
+function nextForTokens(ctx: NextContext): string {
+  if (ctx.trigger === "time") {
+    return `Run \`nerf-watch check\` again in a few days: same-version changes on the provider side are often temporary. If it persists, ${REPORT_IT}.`;
+  }
+  const back = ctx.before ? ` Going back to CLI ${ctx.before} for a day is the quickest way to confirm it.` : "";
+  return `Run \`nerf-watch scan\` to see the numbers for each CLI version.${back} If it holds, ${REPORT_IT}.`;
 }
 
 const ratioUp = (warn: number, alert: number, minAbs: number) => (b: number, a: number): Severity | null => {
@@ -54,9 +76,10 @@ export const RULES: Rule[] = [
     judge: ratioUp(1.5, 2.0, 500),
     title: (_a, _m, where) => `Uncached input per turn jumped ${where}`,
     explain: (b, a) =>
-      `Each API call now sends a median of ${a} tokens that are not served from cache, up from ${b}. ` +
+      `Each API call now sends a median of ${a} that are not served from cache, up from ${b}. ` +
       `You pay full input price for these tokens, so the same work costs more and uses more of your rate limit. ` +
       `Common causes are a larger system prompt, more tool definitions, or a change in how the CLI builds requests.`,
+    next: nextForTokens,
   },
   {
     metric: "cacheCreation",
@@ -67,6 +90,7 @@ export const RULES: Rule[] = [
     explain: (b, a) =>
       `Median cache writes per API call went from ${b} to ${a}. Cache writes are billed above the normal input price. ` +
       `A jump usually means the cached prefix is being invalidated and rebuilt more often.`,
+    next: nextForTokens,
   },
   {
     metric: "firstTurnPrompt",
@@ -75,8 +99,10 @@ export const RULES: Rule[] = [
     judge: ratioUp(1.3, 1.75, 2000),
     title: (_a, _m, where) => `Session startup prompt grew ${where}`,
     explain: (b, a) =>
-      `The first request of a session now carries a median of ${a} prompt tokens, up from ${b}. ` +
+      `The first request of a session now carries a median prompt of ${a}, up from ${b}. ` +
       `That is fixed overhead (system prompt, tool schemas, injected context) paid by every new session and it shrinks the room left for your own work.`,
+    next: (ctx) =>
+      `First check whether you added MCP servers, skills, plugins or memory files (CLAUDE.md, AGENTS.md)${ctx.since ? ` around ${ctx.since}` : ""}: they grow the startup prompt too. If you did not, ${REPORT_IT}.`,
   },
   {
     metric: "cacheHitRate",
@@ -87,6 +113,7 @@ export const RULES: Rule[] = [
     explain: (b, a) =>
       `The share of prompt tokens served from cache fell from ${b} to ${a}. ` +
       `Uncached tokens cost several times more than cached ones and count harder against rate limits, so this shows up as faster limit exhaustion and higher bills for the same work.`,
+    next: nextForTokens,
   },
   {
     metric: "toolErrorRate",
@@ -103,6 +130,8 @@ export const RULES: Rule[] = [
     explain: (b, a) =>
       `The share of tool calls that returned an error went from ${b} to ${a}. ` +
       `This can mean the model is producing malformed tool calls, the tool layer changed, or your environment changed (for example, a broken test suite). Check the last one first.`,
+    next: () =>
+      `Look at a few recent failed tool calls in your sessions first: a broken test command, a missing binary or a permissions change is the usual cause. If your environment did not change, ${REPORT_IT}.`,
   },
   {
     metric: "contextWindow",
@@ -111,7 +140,13 @@ export const RULES: Rule[] = [
     judge: (b, a) => (b <= 0 ? null : a / b <= 0.6 ? "alert" : a / b <= 0.9 ? "warn" : null),
     title: (_a, _m, where) => `Context window shrank ${where}`,
     explain: (b, a) =>
-      `The usable context went from about ${b} to ${a} tokens. Long sessions will compact or truncate sooner, and the model sees less of your code at once.`,
+      `The usable context went from about ${b} to ${a}. Long sessions will compact or truncate sooner, and the model sees less of your code at once.`,
+    next: (ctx) =>
+      ctx.agent === "codex"
+        ? `Check model_context_window in ~/.codex/config.toml and in any profile you use. If you did not change it, ${REPORT_IT}.`
+        : ctx.agent === "claude"
+          ? `Check whether you switched between the 1M context variant of the model and the standard one, or changed the auto-compact setting. If you did not, ${REPORT_IT}.`
+          : `Check whether you changed the context window or compaction settings. If you did not, ${REPORT_IT}.`,
   },
 ];
 
@@ -148,8 +183,8 @@ function byWorkload(c: Cohort): Map<string, Cohort> {
 
 interface Comparison {
   severity: Severity;
-  before: { value: number; samples: number };
-  after: { value: number; samples: number };
+  before: { value: number; samples: number; unit?: string };
+  after: { value: number; samples: number; unit?: string };
   /** For stratified rules: workloads compared, and how many crossed the threshold. */
   workloads?: { paired: number; agreeing: number };
 }
@@ -280,6 +315,7 @@ export function detectVersionShifts(ds: Dataset): Finding[] {
         const pooledAfter = merge(afterSet);
         const cmp = compareCohorts(rule, pooledBefore, pooledAfter);
         if (!cmp) continue;
+        const afterSpan = span(pooledAfter);
         out.push({
           id: `${rule.metric}-shift`,
           severity: cmp.severity,
@@ -288,9 +324,10 @@ export function detectVersionShifts(ds: Dataset): Finding[] {
           trigger: "version",
           title: rule.title(g.agent, g.model, afterSet.length > 1 ? `between CLI ${s[i].version} and ${afterSet[afterSet.length - 1].version}` : `after CLI ${s[i].version}`),
           explanation: rule.explain(m.format(cmp.before.value), m.format(cmp.after.value)) + workloadNote(cmp),
+          nextStep: rule.next({ agent: g.agent, trigger: "version", before: baseline[baseline.length - 1]?.version, since: afterSpan.from || undefined }),
           evidence: [
-            { label: "before", versions: baseline.map((b) => b.version), ...span(pooledBefore), samples: cmp.before.samples, value: cmp.before.value, display: m.format(cmp.before.value) },
-            { label: "after", versions: afterSet.map((b) => b.version), ...span(pooledAfter), samples: cmp.after.samples, value: cmp.after.value, display: m.format(cmp.after.value) },
+            { label: "before", versions: baseline.map((b) => b.version), ...span(pooledBefore), samples: cmp.before.samples, sampleUnit: cmp.before.unit ?? m.sampleUnit, value: cmp.before.value, display: m.format(cmp.before.value) },
+            { label: "after", versions: afterSet.map((b) => b.version), ...afterSpan, samples: cmp.after.samples, sampleUnit: cmp.after.unit ?? m.sampleUnit, value: cmp.after.value, display: m.format(cmp.after.value) },
           ],
         });
         // The after window becomes the new baseline; the next candidate is the version after it.
@@ -354,20 +391,23 @@ export function detectTimeShifts(ds: Dataset, opts: CheckOptions = {}): Finding[
       const cmp = compareCohorts(rule, before, after);
       if (!cmp) continue;
       const { before: b, after: a } = cmp;
+      const afterSpan = span(after);
       out.push({
         id: `${rule.metric}-drift`,
         severity: cmp.severity,
         agent: g.agent,
         model: g.model,
         trigger: "time",
-        title: rule.title(g.agent, g.model, `in the last ${recentDays} days with no CLI change (${version})`),
+        // Dated, not "in the last N days": the recent window ends at this model's last use, which can be long ago.
+        title: rule.title(g.agent, g.model, `in the ${recentDays} days to ${iso(end)} with no CLI change (${version})`),
         explanation:
           rule.explain(m.format(b.value), m.format(a.value)) +
-          ` The CLI version (${version}) and model are the same in both windows, so the change is on the provider side or in how you used the agent.` +
+          ` The CLI version (${version}) and model are the same in both windows, so the change did not come from an update you installed: it is on the provider side or in how you used the agent.` +
           workloadNote(cmp),
+        nextStep: rule.next({ agent: g.agent, trigger: "time", since: afterSpan.from || undefined }),
         evidence: [
-          { label: "before", versions: [version], ...span(before), samples: b.samples, value: b.value, display: m.format(b.value) },
-          { label: "after", versions: [version], ...span(after), samples: a.samples, value: a.value, display: m.format(a.value) },
+          { label: "before", versions: [version], ...span(before), samples: b.samples, sampleUnit: b.unit ?? m.sampleUnit, value: b.value, display: m.format(b.value) },
+          { label: "after", versions: [version], ...afterSpan, samples: a.samples, sampleUnit: a.unit ?? m.sampleUnit, value: a.value, display: m.format(a.value) },
         ],
       });
     }
@@ -420,9 +460,15 @@ export function detectEffortDrops(ds: Dataset): Finding[] {
           explanation:
             `Most sessions on ${prev.version} started at "${prev.effort}" effort; on ${cur.version} most start at "${e.effort}". ` +
             `Sessions where you changed the effort yourself are not counted. If you did not change the effort setting in your config either, the default changed under you. Lower effort is cheaper and faster but plans less and makes more mistakes on hard tasks.`,
+          nextStep:
+            g.agent === "codex"
+              ? `If you want ${prev.effort}, set it explicitly (model_reasoning_effort in ~/.codex/config.toml) so a default change cannot lower it.`
+              : g.agent === "claude"
+                ? `If you want ${prev.effort}, set it explicitly with /effort so a default change cannot lower it.`
+                : `If you want ${prev.effort}, set the effort explicitly in the agent's settings so a default change cannot lower it.`,
           evidence: [
-            { label: "before", versions: [prev.version], ...span(prev.c), samples: prev.samples, value: EFFORT_RANK[prev.effort], display: `${prev.effort} (${Math.round(prev.share * 100)}% of sessions)` },
-            { label: "after", versions: [cur.version], ...span(cur), samples: e.samples, value: EFFORT_RANK[e.effort], display: `${e.effort} (${Math.round(e.share * 100)}% of sessions)` },
+            { label: "before", versions: [prev.version], ...span(prev.c), samples: prev.samples, sampleUnit: "sessions", value: EFFORT_RANK[prev.effort], display: `${prev.effort} (${Math.round(prev.share * 100)}% of sessions)` },
+            { label: "after", versions: [cur.version], ...span(cur), samples: e.samples, sampleUnit: "sessions", value: EFFORT_RANK[e.effort], display: `${e.effort} (${Math.round(e.share * 100)}% of sessions)` },
           ],
         });
       }
@@ -436,13 +482,15 @@ export function detectEffortDrops(ds: Dataset): Finding[] {
 export function detectModelMismatch(ds: Dataset): Finding[] {
   const out: Finding[] = [];
   const groups = new Map<string, { agent: string; req: string; served: string; turns: Turn[] }>();
-  const reqTotals = new Map<string, number>();
+  const reqTurns = new Map<string, Turn[]>();
   for (const t of ds.turns) {
     if (t.sidechain || !t.requestedModel || !t.servedModel) continue;
     const req = normalizeModel(t.requestedModel);
     const served = normalizeModel(t.servedModel);
     const rk = `${t.agent}\u0000${req}`;
-    reqTotals.set(rk, (reqTotals.get(rk) ?? 0) + 1);
+    const rt = reqTurns.get(rk);
+    if (rt) rt.push(t);
+    else reqTurns.set(rk, [t]);
     if (req === served) continue;
     const k = `${rk}\u0000${served}`;
     const g = groups.get(k) ?? { agent: t.agent, req, served, turns: [] };
@@ -450,11 +498,13 @@ export function detectModelMismatch(ds: Dataset): Finding[] {
     groups.set(k, g);
   }
   for (const g of groups.values()) {
-    const total = reqTotals.get(`${g.agent}\u0000${g.req}`) ?? g.turns.length;
+    const requested = reqTurns.get(`${g.agent}\u0000${g.req}`) ?? g.turns;
+    const total = requested.length;
     const share = g.turns.length / total;
     const severity: Severity =
       g.turns.length >= 5 && share >= 0.02 ? "alert" : g.turns.length >= 3 || share >= 0.005 ? "warn" : "info";
-    const versions = [...new Set(g.turns.map((t) => t.cliVersion ?? "unknown"))].sort(compareVersions);
+    const versionsOf = (ts: Turn[]) => [...new Set(ts.map((t) => t.cliVersion ?? "unknown"))].sort(compareVersions);
+    const versions = versionsOf(g.turns);
     out.push({
       id: "model-mismatch",
       severity,
@@ -466,9 +516,11 @@ export function detectModelMismatch(ds: Dataset): Finding[] {
       explanation:
         `${g.turns.length.toLocaleString("en-US")} of ${total.toLocaleString("en-US")} main-thread API responses (${(share * 100).toFixed(1)}%) for sessions configured to use ${g.req} were served by ${g.served}. ` +
         `If you switched models mid-session or use a mode that routes some turns to another model on purpose, this is expected. Otherwise you got a different model than you chose.`,
+      nextStep: `If you did not switch models or turn on a mode that routes some turns to another model, ${REPORT_IT}.`,
       evidence: [
-        { label: "requested", versions, ...span({ turns: g.turns, tools: [], compactions: [] }), samples: total, value: total, display: g.req },
-        { label: "served", versions, ...span({ turns: g.turns, tools: [], compactions: [] }), samples: g.turns.length, value: share, display: `${g.served} (${g.turns.length} turns)` },
+        // The requested side covers every main-thread response for that model; the served side only the mismatched ones.
+        { label: "requested", versions: versionsOf(requested), ...span({ turns: requested, tools: [], compactions: [] }), samples: total, sampleUnit: "turns", value: total, display: g.req },
+        { label: "served", versions, ...span({ turns: g.turns, tools: [], compactions: [] }), samples: g.turns.length, sampleUnit: "turns", value: share, display: `${g.served} (${(share * 100).toFixed(1)}% of turns)` },
       ],
     });
   }
@@ -503,8 +555,9 @@ export function detectHiddenModels(ds: Dataset): Finding[] {
       explanation:
         `${g.turns.length} API responses came from "${g.model}", which does not match any public model naming pattern nerf-watch knows. ` +
         `It may be an internal, experimental or A/B test model. If you did not opt into a preview, you were served something other than a released model.`,
+      nextStep: `If you did not opt into a preview or set a custom model, gateway or proxy, ${REPORT_IT}.`,
       evidence: [
-        { label: "served", versions, ...span({ turns: g.turns, tools: [], compactions: [] }), samples: g.turns.length, value: g.turns.length, display: `${g.turns.length} turns` },
+        { label: "served", versions, ...span({ turns: g.turns, tools: [], compactions: [] }), samples: g.turns.length, sampleUnit: "turns", value: g.turns.length, display: `${g.turns.length} turns` },
       ],
     });
   }
@@ -531,6 +584,7 @@ export function detectFallbacks(ds: Dataset): Finding[] {
     title: `Fell back from ${g.from} to ${g.to} (${g.ts.length}x)`,
     explanation:
       `The agent recorded ${g.ts.length} fallback event(s) that moved the session from ${g.from} to ${g.to}, usually because the first model was unavailable or over capacity.`,
+    nextStep: "Nothing to do unless it happens often.",
     evidence: [
       {
         label: "events",
@@ -538,6 +592,7 @@ export function detectFallbacks(ds: Dataset): Finding[] {
         from: iso(Math.min(...g.ts)),
         to: iso(Math.max(...g.ts)),
         samples: g.ts.length,
+        sampleUnit: "events",
         value: g.ts.length,
         display: `${g.ts.length} fallback(s)`,
       } satisfies Evidence,

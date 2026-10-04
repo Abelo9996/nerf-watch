@@ -72,7 +72,7 @@ struct SettingsView: View {
                     .disabled(AppSettings.logFoldersFromEnvironment)
                 note(AppSettings.logFoldersFromEnvironment
                      ? "Set by NERF_WATCH_ROOTS."
-                     : "Optional. One agent=folder per line, passed as --root. Example: claude=~/work/.claude/projects")
+                     : "Optional. One agent=folder per line, passed as --root. Only the agents listed here are read. Example: claude=~/work/.claude/projects")
             }
 
             Section {

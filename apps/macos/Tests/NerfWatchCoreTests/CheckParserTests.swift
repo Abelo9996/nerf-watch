@@ -37,6 +37,28 @@ import Testing
         #expect(cache.evidence[0].from == "2026-08-23")
     }
 
+    @Test func readsSampleUnitsAndNextStepsFromNewerCLIs() throws {
+        let json = """
+        {"summary":{"alert":0,"warn":1,"info":0},"findings":[{"id":"contextWindow-drift","severity":"warn","agent":"codex","model":"gpt-5.5",
+        "trigger":"time","title":"Context window shrank in the 7 days to 2026-10-02 with no CLI change (0.141.0)","explanation":"x",
+        "nextStep":"Check model_context_window in ~/.codex/config.toml.",
+        "evidence":[{"label":"before","versions":["0.141.0"],"samples":240,"sampleUnit":"turns","value":353400,"display":"353.4k tokens"},
+        {"label":"after","versions":["0.141.0"],"samples":1,"sampleUnit":"sessions","value":258400,"display":"258.4k tokens"}]}]}
+        """
+        let f = try #require(try result(parse(json)).findings.first)
+        #expect(f.nextStep == "Check model_context_window in ~/.codex/config.toml.")
+        #expect(Formatting.samples(f.evidence[0]) == "240 turns")
+        #expect(Formatting.samples(f.evidence[1]) == "1 session")
+        #expect(Formatting.triggerText(f) == "Over time, with no CLI update")
+    }
+
+    @Test func olderCLIOutputHasNoUnitsOrNextStep() throws {
+        let r = try result(parse(demoCheckJSON))
+        let cache = try #require(r.findings.first { $0.detector == "cacheCreation-shift" })
+        #expect(cache.nextStep == nil)
+        #expect(Formatting.samples(cache.evidence[0]) == "n=780")
+    }
+
     @Test func sortsMostSevereFirstAndKeepsOrderWithinSeverity() throws {
         let r = try result(parse(demoCheckJSON))
         #expect(r.findings.map(\.severity) == [.alert, .alert, .warn, .warn, .warn])

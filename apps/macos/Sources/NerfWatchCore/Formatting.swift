@@ -27,6 +27,23 @@ public enum Formatting {
         }
     }
 
+    /// "780 turns", "1 session", or "n=780" when the CLI did not say what was counted.
+    public static func samples(_ e: Evidence) -> String {
+        guard let s = e.samples else { return "" }
+        let n = Int(s.rounded())
+        guard let unit = e.sampleUnit, !unit.isEmpty else { return "n=\(n.formatted())" }
+        return "\(n.formatted()) \(n == 1 && unit.hasSuffix("s") ? String(unit.dropLast()) : unit)"
+    }
+
+    /// How the change was found, in words.
+    public static func triggerText(_ f: Finding) -> String {
+        switch f.trigger {
+        case "version": return "At a CLI version update"
+        case "time": return "Over time, with no CLI update"
+        default: return "Recorded in the logs"
+        }
+    }
+
     /// "2026-08-23 to 2026-10-01", spanning all evidence.
     public static func dateRange(_ f: Finding) -> String {
         let froms = f.evidence.compactMap(\.from).sorted()

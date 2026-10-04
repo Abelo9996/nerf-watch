@@ -22,11 +22,13 @@ export async function loadDataset(opts: LoadOptions = {}): Promise<Dataset> {
   const env = opts.env ?? process.env;
   const home = opts.home ?? homedir();
   const list = (opts.adapters ?? allAdapters).filter((a) => !opts.agents?.length || opts.agents.includes(a.id));
-  const ds: Dataset = { turns: [], toolResults: [], events: [], files: {}, badLines: {} };
+  const ds: Dataset = { turns: [], toolResults: [], events: [], files: {}, badLines: {}, roots: {}, filesFound: {} };
 
   for (const adapter of list) {
     const roots = opts.roots?.[adapter.id] ?? adapter.defaultRoots({ env, homedir: home, platform: process.platform });
     let files = await adapter.discover(roots);
+    ds.roots![adapter.id] = roots;
+    ds.filesFound![adapter.id] = files.length;
     if (opts.since !== undefined) {
       // Files untouched since the cutoff cannot contain newer records.
       const keep = await Promise.all(

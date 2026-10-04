@@ -146,6 +146,20 @@ describe("time drift detector", () => {
     expect(f.find((x) => x.id === "cacheHitRate-drift")).toMatchObject({ severity: "alert", trigger: "time" });
   });
 
+  it("dates the recent window instead of calling it the last N days", () => {
+    // The recent window ends at this model's last use, which may be months before today.
+    const ds = build([
+      { version: "2.1.9", day: 0 },
+      { version: "2.1.9", day: 10 },
+      { version: "2.1.9", day: 20, cacheRead: 1000 },
+      { version: "2.1.9", day: 22, cacheRead: 1000 },
+    ]);
+    const f = detectTimeShifts(ds).find((x) => x.id === "cacheHitRate-drift")!;
+    expect(f.title).toBe("Cache hit rate collapsed in the 7 days to 2026-09-23 with no CLI change (2.1.9)");
+    expect(f.title).not.toContain("last");
+    expect(f.nextStep).toContain("again in a few days");
+  });
+
   it("ignores data from other versions in either window", () => {
     const ds = build([
       { version: "2.1.8", day: 0, cacheRead: 5000 },
@@ -165,6 +179,30 @@ describe("model and effort detectors", () => {
     const f = detectModelMismatch(ds);
     expect(f).toHaveLength(1);
     expect(f[0]).toMatchObject({ id: "model-mismatch", severity: "alert", model: "claude-sonnet-5" });
+  });
+
+  it("describes every requested turn on the requested side of a mismatch", () => {
+    const ds = build([
+      { version: "2.1.1", day: 0, requested: "claude-opus-5", model: "claude-opus-5" },
+      { version: "2.1.2", day: 5, requested: "claude-opus-5", model: "claude-sonnet-5", sessions: 1 },
+    ]);
+    const [f] = detectModelMismatch(ds);
+    const [req, served] = f.evidence;
+    expect(req).toMatchObject({ label: "requested", versions: ["2.1.1", "2.1.2"], from: "2026-09-01", samples: 84, sampleUnit: "turns" });
+    expect(served).toMatchObject({ label: "served", versions: ["2.1.2"], from: "2026-09-06", samples: 12, sampleUnit: "turns" });
+    expect(served.display).toBe("claude-sonnet-5 (14.3% of turns)");
+  });
+
+  it("gives every finding a next step and sample units", () => {
+    const ds = build([...stable, { version: "2.1.5", day: 20, cacheCreation: 2400, cacheRead: 1000 }]);
+    const fs = runDetectors(ds);
+    expect(fs.length).toBeGreaterThan(0);
+    for (const f of fs) {
+      expect(f.nextStep).toBeTruthy();
+      for (const e of f.evidence) expect(e.sampleUnit).toBeTruthy();
+    }
+    expect(fs.find((x) => x.id === "cacheCreation-shift")?.evidence[0].display).toMatch(/ tokens$/);
+    expect(fs.find((x) => x.id === "cacheCreation-shift")?.nextStep).toContain("CLI 2.1.4");
   });
 
   it("ignores sidechain traffic for mismatch", () => {

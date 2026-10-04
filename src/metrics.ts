@@ -69,6 +69,8 @@ export interface Minimums {
   compactions: number;
   /** Turns that report a context window. */
   contextReports: number;
+  /** Sessions those reports come from. */
+  contextSessions: number;
 }
 
 /** Minimum data for a pooled before/after value. */
@@ -79,6 +81,9 @@ export const MIN: Minimums = {
   toolCalls: 100,
   compactions: 2,
   contextReports: 20,
+  // A window is a per-session setting, and one session can be resumed with a
+  // different config, so a change seen in one or two sessions is not evidence.
+  contextSessions: 3,
 };
 
 /** Minimum data for one workload's value inside a stratified comparison. */
@@ -90,6 +95,7 @@ export const MIN_STRATUM: Minimums = {
   toolCalls: 30,
   compactions: 2,
   contextReports: 20,
+  contextSessions: 1,
 };
 
 export function sessionCount(xs: { sessionKey: string }[]): number {
@@ -127,17 +133,21 @@ export function sessionMedian(turns: Turn[], f: (t: Turn) => number): number {
 export interface MetricDef {
   id: string;
   label: string;
-  /** Returns null when the cohort is too small for a stable value. */
-  compute(c: Cohort, min?: Minimums): { value: number; samples: number } | null;
+  /** What the sample count counts, for display ("turns", "sessions", "tool calls"). */
+  sampleUnit: string;
+  /** Returns null when the cohort is too small for a stable value. `unit` overrides `sampleUnit`. */
+  compute(c: Cohort, min?: Minimums): { value: number; samples: number; unit?: string } | null;
+  /** The value with its unit, for example "3,037 tokens" or "80.2%". */
   format(v: number): string;
 }
 
-const fmtTokens = (v: number) => (v >= 10000 ? `${(v / 1000).toFixed(1)}k` : `${Math.round(v).toLocaleString("en-US")}`);
+const fmtTokens = (v: number) => (v >= 10000 ? `${(v / 1000).toFixed(1)}k` : `${Math.round(v).toLocaleString("en-US")}`) + " tokens";
 const fmtPct = (v: number) => `${(v * 100).toFixed(1)}%`;
 
 export const METRICS: Record<string, MetricDef> = {
   newInput: {
     id: "newInput",
+    sampleUnit: "turns",
     label: "uncached input tokens per turn (median of session medians)",
     compute(c, min = MIN) {
       c = { ...c, turns: warmTurns(mainTurns(c.turns)) };
@@ -148,6 +158,7 @@ export const METRICS: Record<string, MetricDef> = {
   },
   cacheCreation: {
     id: "cacheCreation",
+    sampleUnit: "turns",
     label: "cache-creation tokens per turn (median of session medians)",
     compute(c, min = MIN) {
       c = { ...c, turns: warmTurns(mainTurns(c.turns)) };
@@ -159,6 +170,7 @@ export const METRICS: Record<string, MetricDef> = {
   },
   firstTurnPrompt: {
     id: "firstTurnPrompt",
+    sampleUnit: "sessions",
     label: "prompt tokens on the first turn of a session (median)",
     compute(c, min = MIN) {
       const f = c.turns.filter((t) => t.firstInSession && !t.sidechain);
@@ -169,6 +181,7 @@ export const METRICS: Record<string, MetricDef> = {
   },
   cacheHitRate: {
     id: "cacheHitRate",
+    sampleUnit: "turns",
     label: "cache hit rate (cached prompt tokens / all prompt tokens)",
     compute(c, min = MIN) {
       c = { ...c, turns: warmTurns(mainTurns(c.turns)) };
@@ -180,6 +193,7 @@ export const METRICS: Record<string, MetricDef> = {
   },
   toolErrorRate: {
     id: "toolErrorRate",
+    sampleUnit: "tool calls",
     label: "tool call error rate",
     compute(c, min = MIN) {
       if (c.tools.length < min.toolCalls || sessionCount(c.tools) < min.sessions) return null;
@@ -189,15 +203,27 @@ export const METRICS: Record<string, MetricDef> = {
   },
   contextWindow: {
     id: "contextWindow",
+    sampleUnit: "turns",
     label: "context window (reported, or prompt size at auto-compaction)",
     compute(c, min = MIN) {
-      const reported = c.turns.map((t) => t.contextWindow ?? 0).filter((x) => x > 0);
-      // Reported windows are discrete settings, so use the most common value
-      // (ties go to the larger window, which avoids reporting a shrink on a tie).
-      if (reported.length) return reported.length >= min.contextReports ? { value: mode(reported), samples: reported.length } : null;
+      const reportedTurns = c.turns.filter((t) => (t.contextWindow ?? 0) > 0);
+      // Reported windows are discrete settings, so use the most common value:
+      // first per session, then across sessions, so one long session cannot
+      // outvote the others (ties go to the larger window, which avoids
+      // reporting a shrink on a tie).
+      if (reportedTurns.length) {
+        const bySession = new Map<string, number[]>();
+        for (const t of reportedTurns) {
+          const a = bySession.get(t.sessionKey);
+          if (a) a.push(t.contextWindow!);
+          else bySession.set(t.sessionKey, [t.contextWindow!]);
+        }
+        if (reportedTurns.length < min.contextReports || bySession.size < min.contextSessions) return null;
+        return { value: mode([...bySession.values()].map(mode)), samples: reportedTurns.length };
+      }
       const auto = c.compactions.filter((e) => e.auto).map((e) => e.preTokens);
       if (auto.length < min.compactions) return null;
-      return { value: median(auto), samples: auto.length };
+      return { value: median(auto), samples: auto.length, unit: "compactions" };
     },
     format: fmtTokens,
   },

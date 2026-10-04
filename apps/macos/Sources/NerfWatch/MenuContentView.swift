@@ -103,7 +103,8 @@ struct MenuContentView: View {
         switch monitor.phase {
         case .result: return "No changes crossed a threshold."
         case .notRun: return monitor.isRunning ? "Reading session logs." : "Findings appear here after the first check."
-        default: return "No findings to show."
+        case .noData: return "Findings appear here once there are session logs to compare."
+        case .failed: return "Nothing to show until a check succeeds. Fix the problem above, then choose Check now."
         }
     }
 

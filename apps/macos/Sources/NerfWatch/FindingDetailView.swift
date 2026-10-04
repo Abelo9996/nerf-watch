@@ -34,7 +34,7 @@ struct FindingDetailView: View {
             Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 3) {
                 meta("Agent", finding.agent)
                 if let model = finding.model { meta("Model", model) }
-                meta("Changed", triggerText)
+                meta("Changed", Formatting.triggerText(finding))
                 if !Formatting.versionRange(finding).isEmpty { meta("Versions", Formatting.versionRange(finding)) }
                 if !Formatting.dateRange(finding).isEmpty { meta("Dates", Formatting.dateRange(finding)) }
                 meta("Check", finding.detector)
@@ -46,7 +46,7 @@ struct FindingDetailView: View {
                     GridRow {
                         Text("")
                         Text("Value")
-                        Text("Samples")
+                        Text("Based on")
                         Text("CLI")
                         Text("Dates")
                     }
@@ -59,7 +59,7 @@ struct FindingDetailView: View {
                             Text(e.display).font(.system(.caption, design: .monospaced).weight(.semibold))
                             Text(samples(e)).monospacedDigit()
                             Text((e.versions ?? []).joined(separator: ", ")).lineLimit(2)
-                            Text(dates(e)).lineLimit(2)
+                            Text(dates(e)).lineLimit(2).fixedSize(horizontal: false, vertical: true)
                         }
                         .font(.caption)
                     }
@@ -73,6 +73,13 @@ struct FindingDetailView: View {
                 .font(.callout)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
+
+            if let next = finding.nextStep, !next.isEmpty {
+                (Text("Next: ").bold() + Text(next))
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
         }
         .padding(.horizontal, 14)
     }
@@ -84,18 +91,7 @@ struct FindingDetailView: View {
         }
     }
 
-    private var triggerText: String {
-        switch finding.trigger {
-        case "version": return "At a CLI version update"
-        case "time": return "Recently, with no CLI update"
-        default: return "Recorded in the logs"
-        }
-    }
-
-    private func samples(_ e: Evidence) -> String {
-        guard let s = e.samples else { return "" }
-        return "n=\(Int(s).formatted())"
-    }
+    private func samples(_ e: Evidence) -> String { Formatting.samples(e) }
 
     private func dates(_ e: Evidence) -> String {
         switch (e.from, e.to) {
@@ -113,6 +109,7 @@ struct FindingDetailView: View {
             lines.append("  \(e.label): \(e.display)  \(samples(e))  cli \((e.versions ?? []).joined(separator: ", "))  \(dates(e))")
         }
         lines.append(finding.explanation)
+        if let next = finding.nextStep, !next.isEmpty { lines.append("Next: \(next)") }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(lines.joined(separator: "\n"), forType: .string)
     }

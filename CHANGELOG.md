@@ -6,6 +6,26 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-04
+
+### Fixed
+
+- Context window findings need reports from at least 3 sessions on each side, and each session counts once (by its most common window). A window change seen in one or two sessions, for example a session resumed with a different config, was reported as a provider-side shrink on real logs.
+- Same-version drift findings said "in the last 7 days" even when the recent window ended months ago (it ends at the last use of that CLI version and model). Titles now name the end date: "in the 7 days to 2026-10-02". The menu bar app says "Over time, with no CLI update" instead of "Recently".
+- The requested side of a model-mismatch finding now covers every response for the requested model (its own versions, dates and count), not only the mismatched ones.
+- `--root claude=DIR` on its own no longer also reads the default Codex logs (and the reverse). `--root` with an unknown agent name is a usage error instead of being ignored.
+- `--recent-days` and `--baseline-days` reject values that are not whole numbers of 1 or more; `abc` used to switch the drift checks off silently.
+- `report --out` with a wrong extension fails before reading any logs.
+
+### Changed
+
+- `check` starts with a plain-English summary: how much was read, and the verdict in one sentence. When there is too little history for any comparison, it says so instead of "no changes".
+- Every finding has a `Next:` step (`nextStep` in `--json`), and every evidence line labels its units: token values say "tokens", sample counts say "turns", "sessions" or "tool calls" (`sampleUnit` in `--json`). The report and the menu bar app show both.
+- When nothing is found, the message lists the folders that were actually searched (including `--root` folders and `~/.codex/archived_sessions`), and says whether logs were found but were outside the `--since` window.
+- `share` says why sharing helps and reminds you to fill in "What you observed" and tick the checkboxes on the issue form.
+- `nerf-watch` with no command prints the help and where to start.
+- Menu bar app: error states say what to do next, and long date ranges wrap instead of being cut off.
+
 ## [0.2.0] - 2026-10-03
 
 ### Added

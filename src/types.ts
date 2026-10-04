@@ -113,6 +113,10 @@ export interface Dataset extends ParsedFile {
   files: Record<AgentId, number>;
   /** Lines that could not be parsed, per agent. Non-zero is normal for partially written files. */
   badLines: Record<AgentId, number>;
+  /** Directories searched per agent. Shown to the user when nothing is found; never written to reports. */
+  roots?: Record<AgentId, string[]>;
+  /** Number of session files found before the `since` filter, per agent. */
+  filesFound?: Record<AgentId, number>;
 }
 
 export interface DiscoverOptions {
@@ -145,7 +149,10 @@ export interface Evidence {
   from?: string; // ISO date
   to?: string;
   samples: number;
+  /** What `samples` counts: "turns", "sessions", "tool calls", "compactions", "events". */
+  sampleUnit?: string;
   value: number;
+  /** `value` formatted with its unit, for example "3,037 tokens" or "80.2%". */
   display: string;
 }
 
@@ -159,6 +166,8 @@ export interface Finding {
   title: string;
   explanation: string;
   evidence: Evidence[];
+  /** One or two sentences on what to check or do next. */
+  nextStep?: string;
   /** What changed: a CLI version boundary or a time window with no version change. */
   trigger: "version" | "time" | "event";
 }
