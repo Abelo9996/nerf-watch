@@ -30,6 +30,8 @@ npx nerf-watch share                         # contribute findings to the public
 npx nerf-watch card                          # a 1200x630 image of your result to post
 ```
 
+Homebrew (macOS and Linux): `brew install abelo9996/tap/nerf-watch`, then run `nerf-watch check` without `npx`.
+
 ## Example
 
 Output from `nerf-watch check` on the synthetic logs in `scripts/make-demo-data.mjs` (no real data):
@@ -113,6 +115,7 @@ Each state has its own shape, and the menu, tooltip and VoiceOver label say it i
 Install:
 
 1. Download `NerfWatch-macOS.zip` from the [latest release](https://github.com/Abelo9996/nerf-watch/releases/latest), unzip it and move `Nerf Watch.app` to Applications. It needs macOS 13 or newer and Node.js 20 or newer.
+   Or install it with Homebrew: `brew install --cask abelo9996/tap/nerf-watch-app` (this also installs the `nerf-watch` CLI and Node.js).
 2. The app is not signed or notarized. The first time, right-click (or Control-click) `Nerf Watch.app`, choose Open, then Open again. On macOS 15 and later, if there is no Open button, go to System Settings > Privacy & Security and click Open Anyway.
 
 The app uses `nerf-watch` from your PATH if it is installed, else `npx -y nerf-watch@latest`; set a different CLI (an executable or a `cli.js` file) in Settings. If Node.js is missing it says so and links to the installer. The app itself makes no network requests; it only runs the CLI and keeps a small state file of alert keys in `~/Library/Application Support/NerfWatch/`.

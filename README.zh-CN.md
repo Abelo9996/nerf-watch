@@ -30,6 +30,8 @@ npx nerf-watch share                         # contribute findings to the public
 npx nerf-watch card                          # a 1200x630 image of your result to post
 ```
 
+Homebrew（macOS 和 Linux）：`brew install abelo9996/tap/nerf-watch`，之后直接运行 `nerf-watch check`，无需 `npx`。
+
 ## 示例
 
 下面是 `nerf-watch check` 在 `scripts/make-demo-data.mjs` 生成的合成日志上的输出（不含任何真实数据）：
