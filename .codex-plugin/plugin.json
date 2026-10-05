@@ -1,0 +1,36 @@
+{
+  "name": "nerf-watch",
+  "version": "0.3.0",
+  "description": "Find out when your coding agent quietly got worse or more expensive. Reads local Claude Code and Codex session logs and flags changes you did not make.",
+  "author": { "name": "Abel Yagubyan", "url": "https://github.com/Abelo9996" },
+  "homepage": "https://github.com/Abelo9996/nerf-watch#readme",
+  "repository": "https://github.com/Abelo9996/nerf-watch",
+  "license": "MIT",
+  "keywords": ["regression", "monitoring", "cost", "tokens", "codex"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "nerf-watch",
+    "shortDescription": "Spot silent agent regressions",
+    "longDescription": "nerf-watch reads the session logs Codex and Claude Code already keep on this machine and reports changes you did not make: a different model answering than the one you picked, lower reasoning effort, a smaller context window, more cache writes or uncached input per turn after a CLI update, a cache hit rate collapse, or more failing tool calls. Each finding shows before and after numbers, CLI versions, dates and sample sizes. The plugin adds a skill that runs the nerf-watch CLI through npx and explains the findings. It works locally and never uploads anything; nerf-watch share only prints an anonymized summary and a prefilled issue link for you to submit yourself. Requires Node 20+.",
+    "developerName": "Abel Yagubyan",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Reads local Codex and Claude Code session logs",
+      "Flags model, effort, context window, cache and cost changes you did not make",
+      "Writes an anonymized report for a bug report"
+    ],
+    "websiteURL": "https://github.com/Abelo9996/nerf-watch",
+    "supportURL": "https://github.com/Abelo9996/nerf-watch/issues",
+    "privacyPolicyURL": "https://github.com/Abelo9996/nerf-watch#privacy",
+    "termsOfServiceURL": "https://github.com/Abelo9996/nerf-watch/blob/main/LICENSE",
+    "defaultPrompt": [
+      "Did my coding agent get worse or more expensive lately?",
+      "Check whether the last Codex update changed cache or token use",
+      "Write an anonymized nerf-watch report for a bug report"
+    ],
+    "brandColor": "#B45309",
+    "composerIcon": "./assets/icon.svg",
+    "logo": "./assets/icon.svg",
+    "screenshots": ["./assets/screenshot.png"]
+  }
+}

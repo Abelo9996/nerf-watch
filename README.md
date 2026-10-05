@@ -32,6 +32,26 @@ npx nerf-watch card                          # a 1200x630 image of your result t
 
 Homebrew (macOS and Linux): `brew install abelo9996/tap/nerf-watch`, then run `nerf-watch check` without `npx`.
 
+## Install as a Claude Code plugin
+
+Inside Claude Code:
+
+```text
+/plugin marketplace add Abelo9996/open-agent-lab
+/plugin install nerf-watch@open-agent-lab
+```
+
+Then run `/reload-plugins` or start a new session. The plugin adds the nerf-watch skill and two commands: `/nerf-watch:check` runs `check` and explains the findings (pass flags such as `--since 30d --agent claude`), and `/nerf-watch:share` prints the anonymized payload and the prefilled issue link for the regression watch without opening or submitting anything. Both run the CLI through `npx -y nerf-watch`, so there is nothing else to install. From a shell: `claude plugin marketplace add Abelo9996/open-agent-lab`, then `claude plugin install nerf-watch@open-agent-lab`.
+
+## Install as a Codex plugin
+
+```sh
+codex plugin marketplace add Abelo9996/open-agent-lab
+codex plugin add nerf-watch@open-agent-lab
+```
+
+This adds the nerf-watch skill to Codex, so asking "did Codex get worse after the last update?" runs nerf-watch and explains the result.
+
 ## Example
 
 Output from `nerf-watch check` on the synthetic logs in `scripts/make-demo-data.mjs` (no real data):

@@ -20,7 +20,7 @@ jobs:
       run:
         working-directory: apps/macos
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - run: swift --version
       - name: Unit tests
         run: ./test.sh
@@ -28,7 +28,7 @@ jobs:
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then export VERSION="${GITHUB_REF_NAME#v}"; fi
           BUILD_NUMBER="$GITHUB_RUN_NUMBER" ./build.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: NerfWatch-macOS
           path: apps/macos/build/NerfWatch-macOS.zip
@@ -42,7 +42,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: NerfWatch-macOS
       - name: Upload NerfWatch-macOS.zip to the release for this tag

@@ -32,6 +32,26 @@ npx nerf-watch card                          # a 1200x630 image of your result t
 
 Homebrew（macOS 和 Linux）：`brew install abelo9996/tap/nerf-watch`，之后直接运行 `nerf-watch check`，无需 `npx`。
 
+## 作为 Claude Code 插件安装
+
+在 Claude Code 里运行：
+
+```text
+/plugin marketplace add Abelo9996/open-agent-lab
+/plugin install nerf-watch@open-agent-lab
+```
+
+然后运行 `/reload-plugins` 或开一个新会话。插件会加入 nerf-watch skill 和两个命令：`/nerf-watch:check` 运行 `check` 并解释结果（可以带上 `--since 30d --agent claude` 这类参数）；`/nerf-watch:share` 打印匿名化的内容和回归观察站的预填 issue 链接，不会打开或提交任何东西。两者都通过 `npx -y nerf-watch` 运行 CLI，不需要另外安装。在终端里也可以：`claude plugin marketplace add Abelo9996/open-agent-lab`，然后 `claude plugin install nerf-watch@open-agent-lab`。
+
+## 作为 Codex 插件安装
+
+```sh
+codex plugin marketplace add Abelo9996/open-agent-lab
+codex plugin add nerf-watch@open-agent-lab
+```
+
+这会给 Codex 加入 nerf-watch skill，问它“上次更新之后 Codex 是不是变差了？”时，它会运行 nerf-watch 并解释结果。
+
 ## 示例
 
 下面是 `nerf-watch check` 在 `scripts/make-demo-data.mjs` 生成的合成日志上的输出（不含任何真实数据）：

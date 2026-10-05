@@ -1,0 +1,11 @@
+.git/
+node_modules/
+dist/
+coverage/
+test/
+docs/
+apps/
+scripts/
+*.tgz
+*.log
+.env

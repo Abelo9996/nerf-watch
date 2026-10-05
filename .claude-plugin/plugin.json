@@ -1,0 +1,11 @@
+{
+  "name": "nerf-watch",
+  "displayName": "nerf-watch",
+  "version": "0.3.0",
+  "description": "Find out when your coding agent quietly got worse or more expensive. Reads local Claude Code and Codex session logs and flags changes you did not make.",
+  "author": { "name": "Abel Yagubyan", "url": "https://github.com/Abelo9996" },
+  "homepage": "https://github.com/Abelo9996/nerf-watch#readme",
+  "repository": "https://github.com/Abelo9996/nerf-watch",
+  "license": "MIT",
+  "keywords": ["regression", "monitoring", "cost", "tokens", "session-logs"]
+}
