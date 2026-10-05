@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - Unreleased
+
+### Added
+
+- `nerf-watch card` writes a 1200x630 SVG of your result (the size X, Bluesky and link previews use): a headline such as "Cache writes per turn up 3.3x after Claude Code 2.1.272" or "No silent changes in Claude Code or Codex over the last 30 days", up to three findings with severity and before and after values, how many responses and sessions were compared, the date range, and a footer with `npx nerf-watch check` and the repository. It is drawn only from the anonymized `share` payload after the same privacy scan, uses the system fonts, has no new dependencies, and follows light or dark mode where the viewer supports it. With too little history it writes nothing. `--out` takes an `.svg` path; PNG is not built in, and `card` prints how to convert (`rsvg-convert`, or a browser screenshot). `--json` reports what was written.
+- `check` ends with the `card` command (with the same `--since` and `--agent`) when there is something to post, including an all-clear.
+- Menu bar app: "Save share card" runs `nerf-watch card` into Downloads and shows the file in Finder.
+- `scripts/make-demo-data.mjs --clean` writes synthetic logs with no changes, for the all-clear case.
+
 ## [0.2.1] - 2026-10-04
 
 ### Fixed

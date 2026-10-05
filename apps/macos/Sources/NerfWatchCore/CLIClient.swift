@@ -44,11 +44,60 @@ public struct CLIClient: Sendable {
         }
     }
 
+    /// `nerf-watch card --out <file> --json`: writes the share card SVG to `outputPath`.
+    public static func cardCommand(outputPath: String) -> [String] {
+        ["card", "--out", outputPath, "--json"]
+    }
+
+    /// Where "Save share card" writes: the folder given (normally Downloads), named by date.
+    public static func cardURL(directory: URL, date: Date) -> URL {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let c = calendar.dateComponents([.year, .month, .day], from: date)
+        let name = String(format: "nerf-watch-card-%04d-%02d-%02d.svg", c.year ?? 0, c.month ?? 0, c.day ?? 0)
+        return directory.appendingPathComponent(name)
+    }
+
+    /// Full argument list for a command, including the invocation prefix and the log folders.
+    public func arguments(for command: [String]) -> [String] {
+        invocation.arguments(command + rootArguments)
+    }
+
+    /// Writes the share card. Succeeds with the written path.
+    public func card(outputPath: String) async -> Result<String, CheckFailure> {
+        switch await run(Self.cardCommand(outputPath: outputPath)) {
+        case .failure(let f): return .failure(f)
+        case .success(let out): return Self.parseCard(stdout: out.stdout, stderr: out.stderr, exitCode: out.exitCode)
+        }
+    }
+
+    /// Reads the `card --json` output: `{"out": path, ...}` when a card was written,
+    /// `{"out": null, "message": ...}` when there was nothing to put on one.
+    public static func parseCard(stdout: Data, stderr: Data, exitCode: Int32) -> Result<String, CheckFailure> {
+        let errText = String(decoding: stderr, as: UTF8.self)
+        if exitCode == 2 {
+            let lines = errText.split(whereSeparator: \.isNewline).map(String.init)
+            let first = lines.first { $0.hasPrefix("nerf-watch: ") }.map { String($0.dropFirst("nerf-watch: ".count)) }
+            if let first, first.hasPrefix("Unknown command") {
+                return .failure(.failed(message: "This nerf-watch is too old to make share cards. Update it (npm install -g nerf-watch) and try again."))
+            }
+            return .failure(.failed(message: first ?? CheckParser.lastLine(errText) ?? "nerf-watch rejected the options."))
+        }
+        guard exitCode == 0, let json = CheckParser.extractJSONObject(stdout),
+              let obj = try? JSONSerialization.jsonObject(with: json) as? [String: Any]
+        else {
+            let detail = CheckParser.lastLine(errText) ?? "exit code \(exitCode)"
+            return .failure(.failed(message: "Could not make the share card: \(detail)"))
+        }
+        if let path = obj["out"] as? String, !path.isEmpty { return .success(path) }
+        return .failure(.failed(message: (obj["message"] as? String) ?? "No share card was written."))
+    }
+
     private func run(_ command: [String]) async -> Result<ProcessOutput, CheckFailure> {
         do {
             let out = try await ProcessRunner.run(
                 executable: invocation.executable,
-                arguments: invocation.arguments(command + rootArguments),
+                arguments: arguments(for: command),
                 environment: environment,
                 timeout: timeout
             )

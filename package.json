@@ -1,6 +1,6 @@
 {
   "name": "nerf-watch",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Find out when your coding agent quietly got worse or more expensive. Reads local Claude Code and Codex session logs and flags changes you did not make.",
   "type": "module",
   "bin": {

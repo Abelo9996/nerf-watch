@@ -17,7 +17,7 @@ final class Monitor: ObservableObject {
     @Published private(set) var lastChecked: Date?
     @Published private(set) var nextCheck: Date?
     @Published private(set) var invocationLabel: String?
-    /// Transient feedback for "Copy anonymized report".
+    /// Transient feedback for "Copy anonymized report" and "Save share card".
     @Published var reportMessage: String?
     @Published private(set) var isBuildingReport = false
 
@@ -181,6 +181,34 @@ final class Monitor: ObservableObject {
                 reportMessage = f.message
             }
             try? await Task.sleep(nanoseconds: 6_000_000_000)
+            if !isBuildingReport { reportMessage = nil }
+        }
+    }
+
+    /// Writes the share card to Downloads with `nerf-watch card` and shows it in Finder.
+    func saveCard() {
+        guard !isBuildingReport else { return }
+        isBuildingReport = true
+        reportMessage = "Making share card"
+        Task {
+            defer { isBuildingReport = false }
+            let folder = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+                ?? URL(fileURLWithPath: NSHomeDirectory())
+            let target = CLIClient.cardURL(directory: folder, date: Date())
+            let result: Result<String, CheckFailure>
+            switch await makeClient() {
+            case .failure(let f): result = .failure(f)
+            case .success(let client): result = await client.card(outputPath: target.path)
+            }
+            switch result {
+            case .success(let path):
+                let url = URL(fileURLWithPath: path)
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+                reportMessage = "Saved \(url.lastPathComponent) to \(url.deletingLastPathComponent().lastPathComponent). Look at it before posting."
+            case .failure(let f):
+                reportMessage = f.message
+            }
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
             if !isBuildingReport { reportMessage = nil }
         }
     }

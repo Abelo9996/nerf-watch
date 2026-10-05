@@ -5,7 +5,8 @@ import { extname, sep } from "node:path";
 import { cac } from "cac";
 import { adapters } from "./adapters/index.js";
 import { runDetectors } from "./detectors.js";
-import { bold, checkHeadline, countBySeverity, datasetSummary, dim, formatFinding, SEGMENT_ALIGN, SEGMENT_HEADERS, segmentRows, table } from "./format.js";
+import { cardModel, renderCardSvg } from "./card.js";
+import { bold, checkHeadline, countBySeverity, datasetSummary, dim, formatFinding, SEGMENT_ALIGN, SEGMENT_HEADERS, segmentRows, table, tooLittleHistory } from "./format.js";
 import { loadDataset } from "./load.js";
 import { buildSegments } from "./metrics.js";
 import { buildReport, reportToMarkdown, toolVersion } from "./report.js";
@@ -140,6 +141,99 @@ async function share(o: ShareOpts): Promise<void> {
   }
 }
 
+/** The `nerf-watch card` command for the data `check` just read: same --since and --agent. */
+export function cardCommand(o: Pick<Common, "since" | "agent">): string {
+  const parts = ["nerf-watch", "card"];
+  if (o.since !== undefined && /^[\w:.+-]+$/.test(String(o.since))) parts.push("--since", String(o.since));
+  for (const a of parseAgents(o.agent) ?? []) parts.push("--agent", a);
+  return parts.join(" ");
+}
+
+/** How to turn the SVG into a PNG for sites that do not accept SVG uploads. */
+export function pngHelp(svg: string): string[] {
+  const q = (p: string) => (/^[\w./\\:-]+$/.test(p) ? p : `"${p}"`);
+  const png = q(svg.replace(/\.svg$/i, "") + ".png");
+  svg = q(svg);
+  return [
+    "X and Bluesky need a PNG. To convert it:",
+    `  rsvg-convert -o ${png} ${svg}   (librsvg: brew install librsvg, or apt install librsvg2-bin)`,
+    `  or open ${svg} in a browser and take a screenshot of the card (1200x630)`,
+  ];
+}
+
+interface CardOpts extends Common {
+  out: string;
+  recentDays: number;
+  baselineDays: number;
+}
+
+/**
+ * Writes a 1200x630 SVG of the result, built from the same anonymized payload
+ * `share` shows, after the same privacy scan. No network calls.
+ */
+async function card(o: CardOpts): Promise<void> {
+  const out = String(o.out);
+  const ext = extname(out).toLowerCase();
+  if (ext === ".png") {
+    throw new UsageError(
+      [
+        "PNG output is not built in: it would need a native image library or a headless browser, which would make `npx nerf-watch` slow to install.",
+        `Write the SVG with \`nerf-watch card --out ${out.slice(0, -4)}.svg\`, then convert it.`,
+        ...pngHelp(`${out.slice(0, -4)}.svg`),
+      ].join("\n"),
+    );
+  }
+  if (ext !== ".svg") throw new UsageError(`--out must end in .svg, got "${out}"`);
+  const recentDays = parsePositiveInt("--recent-days", o.recentDays);
+  const baselineDays = parsePositiveInt("--baseline-days", o.baselineDays);
+  const ds = await load(o);
+  if (!ds.turns.length) return noData(ds, o);
+  const findings = runDetectors(ds, { recentDays, baselineDays });
+  const ids = localIdentifiers();
+  const payload = buildSharePayload(ds, findings, ids);
+  const problems = scanPayload(payload, ids);
+  if (problems.length) {
+    console.error("nerf-watch: refusing to make a card. The anonymized data still contains something that could identify you:");
+    for (const p of problems) console.error(`  ${p}`);
+    console.error("Nothing was written. Please report this as a nerf-watch bug (without the values).");
+    process.exitCode = 2;
+    return;
+  }
+  const notable = findings.filter((f) => f.severity !== "info").length;
+  const skip = (message: string) => {
+    if (o.json) console.log(JSON.stringify({ out: null, message }));
+    else console.log(message);
+  };
+  if (!payload.findings.length && notable) {
+    return skip(
+      `check found ${notable} warning(s) or alert(s), but none of them can be shown in anonymized form (no CLI version recorded), so no card was written. ` +
+        "Run `nerf-watch check` for the details.",
+    );
+  }
+  if (!payload.findings.length && tooLittleHistory(ds)) {
+    return skip(
+      "No card yet: there is not enough history to compare, so an all-clear would not mean much. " +
+        "A comparison needs at least 5 sessions and 50 turns on the same model on each side. Run it again after more sessions.",
+    );
+  }
+  const sessions = new Set(ds.turns.map((t) => t.sessionKey)).size;
+  const model = cardModel(payload, { since: o.since, totalFindings: notable, sessions });
+  writeFileSync(out, renderCardSvg(model));
+  if (o.json) {
+    console.log(JSON.stringify({ out, kind: model.kind, headline: model.headline, findings: model.rows.length, more: model.more }, null, 2));
+    return;
+  }
+  console.log(`Wrote ${out} (1200x630 SVG): ${model.headline}`);
+  console.log(
+    dim(
+      "It shows only what `nerf-watch share` would share: agent names, CLI versions, model ids, dates and numbers. " +
+        "No prompts, paths, project names, session ids, user or host names. Look at it before posting.",
+    ),
+  );
+  console.log("");
+  for (const line of pngHelp(out)) console.log(dim(line));
+}
+
 export function buildCli() {
   const cli = cac("nerf-watch");
 
@@ -194,7 +288,9 @@ export function buildCli() {
           console.log("");
         }
         console.log(bold(`${counts.alert} alert(s), ${counts.warn} warning(s), ${counts.info} info`));
-        if (findings.some((f) => f.severity !== "info")) console.log(dim("Share an anonymized summary with the open-agent-lab regression watch: nerf-watch share"));
+        const notable = findings.some((f) => f.severity !== "info");
+        if (notable) console.log(dim("Share an anonymized summary with the open-agent-lab regression watch: nerf-watch share"));
+        if (notable || !tooLittleHistory(ds)) console.log(dim(`Make a shareable image of this result: ${cardCommand(o)}`));
       }
       const failAt: Severity[] = o.failOn === "warn" ? ["alert", "warn"] : o.failOn === "alert" ? ["alert"] : [];
       if (findings.some((f) => failAt.includes(f.severity))) process.exitCode = 1;
@@ -203,6 +299,12 @@ export function buildCli() {
   common(cli.command("share", "Show the anonymized findings to share and print a prefilled regression-report issue link"))
     .option("--open", "Open the link in your browser")
     .action(share);
+
+  common(cli.command("card", "Write a 1200x630 SVG image of your result to post (same anonymized data as share)"))
+    .option("--out <file>", "Output file (.svg)", { default: "nerf-watch-card.svg" })
+    .option("--recent-days <n>", "Recent window for same-version drift checks", { default: 7 })
+    .option("--baseline-days <n>", "Baseline window before the recent window", { default: 28 })
+    .action(card);
 
   common(cli.command("report", "Write an anonymized, shareable report (no prompts, paths or project names)"))
     .option("--out <file>", "Output file; .md or .json picks the format", { default: "nerf-watch-report.md" })

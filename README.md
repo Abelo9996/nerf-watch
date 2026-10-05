@@ -27,6 +27,7 @@ npx nerf-watch scan                          # baselines per CLI version and mod
 npx nerf-watch check --since 30d --agent claude
 npx nerf-watch report --out nerf-watch-report.md   # anonymized, shareable
 npx nerf-watch share                         # contribute findings to the public regression watch
+npx nerf-watch card                          # a 1200x630 image of your result to post
 ```
 
 ## Example
@@ -81,6 +82,7 @@ WARN   codex  gpt-5.5  Context window shrank in the 7 days to 2026-10-02 with no
 
 2 alert(s), 3 warning(s), 0 info
 Share an anonymized summary with the open-agent-lab regression watch: nerf-watch share
+Make a shareable image of this result: nerf-watch card
 ```
 
 (Explanations trimmed for the last three findings.) To reproduce it from a clone of this repository:
@@ -106,7 +108,7 @@ A small status light for the menu bar. It runs `nerf-watch check --json` every 3
 | red octagon | alerts |
 | grey dashed circle | not checked yet, no logs found, or the check failed |
 
-Each state has its own shape, and the menu, tooltip and VoiceOver label say it in words. The menu lists every finding (severity, agent, model, title, CLI version range); click one for the before and after numbers, how much data they rest on, and what to do next. It also has Check now, Copy anonymized report (`report --json` to the clipboard), Settings (interval, CLI path, log folders, launch at login) and Quit. When an alert appears that was not there on the previous run, you get a macOS notification.
+Each state has its own shape, and the menu, tooltip and VoiceOver label say it in words. The menu lists every finding (severity, agent, model, title, CLI version range); click one for the before and after numbers, how much data they rest on, and what to do next. It also has Check now, Copy anonymized report (`report --json` to the clipboard), Save share card (`card` into Downloads, shown in Finder), Settings (interval, CLI path, log folders, launch at login) and Quit. When an alert appears that was not there on the previous run, you get a macOS notification.
 
 Install:
 
@@ -180,6 +182,7 @@ Details per agent:
 - `nerf-watch report` writes aggregate numbers only: token medians, rates, CLI versions, model ids, dates and counts. It contains no prompts, responses, tool output, file paths, project names or session ids. Model ids that look like account-specific deployments (ARNs, URLs, long numeric ids) are replaced with a hash. The test suite plants sentinel strings in synthetic logs and fails if any of them reach a report.
 - Read the report before you share it. It is plain markdown or JSON.
 - `nerf-watch share` builds an even smaller payload (see below), prints it in full, and only then prints a link. Opening that link and pressing submit is the only way anything leaves your machine.
+- `nerf-watch card` draws an image from that same payload, after the same scan. Nothing on it can be a path, project name, user name or session id.
 
 ## Sharing with the regression watch
 
@@ -198,6 +201,23 @@ npx nerf-watch share --open   # same, and open the link in your browser
 
 nerf-watch makes no network request in any of this. `--open` launches your browser on the link; without it, nothing happens until you open the link yourself. The issue is public, so read it before you submit. A scheduled job on open-agent-lab validates each report and aggregates the findings per agent, CLI version, model and signal on the site.
 
+## Share card
+
+`nerf-watch card` writes a 1200x630 SVG of your result, the size X, Bluesky and link previews use, to post or attach to a GitHub issue:
+
+![Example share card on synthetic logs: "Cache writes per turn up 3.3x after Claude Code 2.1.272", with two alerts and a warning, each with before and after values, and the footer "checked with nerf-watch, npx nerf-watch check, github.com/Abelo9996/nerf-watch"](docs/card-example.svg)
+
+```sh
+npx nerf-watch card                              # writes nerf-watch-card.svg
+npx nerf-watch card --since 30d --out card.svg   # same options as check
+```
+
+With findings, the headline is the most important one and the card lists up to three, each with its severity and before and after values. With none, it says so: "No silent changes in Claude Code or Codex over the last 30 days", with how many responses, sessions and days were compared. When there is too little history for any comparison, it writes no card, since an all-clear would not mean anything yet. `check` ends with the `card` command to run whenever there is something to post.
+
+The card is built only from the anonymized `share` payload and runs the same privacy scan, so it holds agent names, CLI versions, model ids, dates and numbers. Look at it before posting anyway. It uses your system fonts and follows your light or dark setting where the viewer supports it.
+
+The output is SVG only, so the package stays free of native image libraries. X and Bluesky need a PNG: convert with `rsvg-convert -o nerf-watch-card.png nerf-watch-card.svg` (librsvg: `brew install librsvg` or `apt install librsvg2-bin`), or open the SVG in a browser and take a screenshot. `card` prints these steps after writing the file.
+
 ## Supported agents
 
 | Agent | Default location | Override |
@@ -215,9 +235,11 @@ nerf-watch check   [--since WHEN] [--agent ID] [--root AGENT=DIR] [--json]
                    [--fail-on alert|warn|never] [--recent-days 7] [--baseline-days 28]
 nerf-watch report  [--since WHEN] [--agent ID] [--root AGENT=DIR] [--json] [--out FILE.md|FILE.json] [--share [--open]]
 nerf-watch share   [--since WHEN] [--agent ID] [--root AGENT=DIR] [--json] [--open]
+nerf-watch card    [--since WHEN] [--agent ID] [--root AGENT=DIR] [--json] [--out FILE.svg]
+                   [--recent-days 7] [--baseline-days 28]
 ```
 
-`WHEN` is a date (`2026-09-01`) or a span (`12h`, `7d`, `4w`). Exit codes: 0 ok, 1 findings at or above `--fail-on`, 2 usage error or a share payload that failed the privacy scan.
+`WHEN` is a date (`2026-09-01`) or a span (`12h`, `7d`, `4w`). Exit codes: 0 ok, 1 findings at or above `--fail-on`, 2 usage error or a share or card payload that failed the privacy scan.
 
 ## Agent skill
 

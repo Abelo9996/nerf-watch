@@ -153,7 +153,15 @@ export function toJsonl(lines) {
  * - Codex 0.140.0 -> 0.141.0: default effort drops from high to medium.
  * - Codex 0.141.0, last 7 days: context window shrinks from 353.4k to 258.4k with no CLI change.
  */
-export function writeDemo(dir, end = Date.UTC(2026, 9, 2, 18)) {
+/**
+ * Writes the demo logs. With `clean: true` nothing changes across CLI versions
+ * or over time, so `check` finds nothing (the all-clear case).
+ * @param {string} dir
+ * @param {number} [end]
+ * @param {{ clean?: boolean }} [opts]
+ */
+export function writeDemo(dir, end = Date.UTC(2026, 9, 2, 18), opts = {}) {
+  const clean = !!opts.clean;
   uuidCounter = 0;
   const r = rng(7);
   const claudeDirs = ["-home-demo-project", "-home-demo-project-api", "-home-demo-project-web"].map((p) => join(dir, "claude", "projects", p));
@@ -164,12 +172,12 @@ export function writeDemo(dir, end = Date.UTC(2026, 9, 2, 18)) {
   const claudePlan = [
     { version: "2.1.270", from: 40, to: 28, n: 10, cacheCreation: 900, cacheRead: 42000 },
     { version: "2.1.271", from: 27, to: 15, n: 10, cacheCreation: 950, cacheRead: 42000 },
-    { version: "2.1.272", from: 14, to: 0, n: 12, cacheCreation: 2900, cacheRead: 12000 },
+    { version: "2.1.272", from: 14, to: 0, n: 12, cacheCreation: clean ? 920 : 2900, cacheRead: clean ? 42000 : 12000 },
   ];
   for (const p of claudePlan) {
     for (let i = 0; i < p.n; i++) {
       const start = day(p.from - ((p.from - p.to) * i) / p.n);
-      const mismatch = p.version === "2.1.272" && i % 4 === 0;
+      const mismatch = !clean && p.version === "2.1.272" && i % 4 === 0;
       const s = claudeSession({ version: p.version, model: mismatch ? "claude-sonnet-5" : "claude-opus-5", requested: "claude-opus-5", start, turns: 40, cacheCreation: p.cacheCreation, cacheRead: p.cacheRead, r });
       writeFileSync(join(claudeDirs[i % claudeDirs.length], `${s.sessionId}.jsonl`), toJsonl(s.lines));
     }
@@ -177,8 +185,8 @@ export function writeDemo(dir, end = Date.UTC(2026, 9, 2, 18)) {
 
   const codexPlan = [
     { version: "0.140.0", from: 40, to: 21, n: 8, effort: "high", ctx: 353400 },
-    { version: "0.141.0", from: 20, to: 8, n: 8, effort: "medium", ctx: 353400 },
-    { version: "0.141.0", from: 6, to: 0, n: 8, effort: "medium", ctx: 258400 },
+    { version: "0.141.0", from: 20, to: 8, n: 8, effort: clean ? "high" : "medium", ctx: 353400 },
+    { version: "0.141.0", from: 6, to: 0, n: 8, effort: clean ? "high" : "medium", ctx: clean ? 353400 : 258400 },
   ];
   for (const p of codexPlan) {
     for (let i = 0; i < p.n; i++) {
@@ -196,9 +204,9 @@ export function writeDemo(dir, end = Date.UTC(2026, 9, 2, 18)) {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const out = process.argv[2];
   if (!out) {
-    console.error("usage: node scripts/make-demo-data.mjs <out-dir>");
+    console.error("usage: node scripts/make-demo-data.mjs <out-dir> [--clean]");
     process.exit(2);
   }
-  const { claudeRoot, codexRoot } = writeDemo(out);
+  const { claudeRoot, codexRoot } = writeDemo(out, undefined, { clean: process.argv.includes("--clean") });
   console.log(`Wrote synthetic logs.\n  nerf-watch check --root claude=${claudeRoot} --root codex=${codexRoot}`);
 }

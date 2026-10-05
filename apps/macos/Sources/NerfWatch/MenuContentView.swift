@@ -117,6 +117,7 @@ struct MenuContentView: View {
             }
             .keyboardShortcut("r")
             MenuRow(title: "Copy anonymized report", disabled: monitor.isBuildingReport) { monitor.copyReport() }
+            MenuRow(title: "Save share card", disabled: monitor.isBuildingReport) { monitor.saveCard() }
             if let message = monitor.reportMessage {
                 Text(message)
                     .font(.caption)

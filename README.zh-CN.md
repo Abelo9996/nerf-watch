@@ -27,6 +27,7 @@ npx nerf-watch scan                          # baselines per CLI version and mod
 npx nerf-watch check --since 30d --agent claude
 npx nerf-watch report --out nerf-watch-report.md   # anonymized, shareable
 npx nerf-watch share                         # contribute findings to the public regression watch
+npx nerf-watch card                          # a 1200x630 image of your result to post
 ```
 
 ## 示例
@@ -81,6 +82,7 @@ WARN   codex  gpt-5.5  Context window shrank in the 7 days to 2026-10-02 with no
 
 2 alert(s), 3 warning(s), 0 info
 Share an anonymized summary with the open-agent-lab regression watch: nerf-watch share
+Make a shareable image of this result: nerf-watch card
 ```
 
 （后三条结果的解释文字已省略。）在本仓库的克隆目录中复现：
@@ -140,6 +142,7 @@ token 类和工具错误类检测，只有当变化在至少两个项目内部�
 - `nerf-watch report` 只写入聚合数据：token 中位数、比率、CLI 版本、模型 ID、日期和计数。报告里不包含任何 prompt、响应、工具输出、文件路径、项目名称或会话 ID。看起来像账号专属部署的模型 ID（ARN、URL、很长的数字 ID）会被替换成哈希值。测试套件会在合成日志里埋入哨兵字符串，只要其中任何一个出现在报告里，测试就会失败。
 - 分享之前请先自己读一遍报告。它就是普通的 markdown 或 JSON。
 - `nerf-watch share` 会生成一份更小的数据（见下文），先完整打印出来，然后才打印链接。只有当你打开这个链接并点击提交时，数据才会离开你的机器。
+- `nerf-watch card` 用同一份数据画图，并经过同样的扫描。图上不可能出现路径、项目名称、用户名或会话 ID。
 
 ## 分享到回归观察页
 
@@ -158,6 +161,23 @@ npx nerf-watch share --open   # same, and open the link in your browser
 
 整个过程中 nerf-watch 不会发起任何网络请求。`--open` 会在浏览器中打开这个链接；不加的话，在你自己打开链接之前什么都不会发生。issue 是公开的，提交之前请先读一遍。open-agent-lab 上有一个定时任务会校验每份报告，并在网站上按智能体、CLI 版本、模型和信号对检测结果进行汇总。
 
+## 分享卡片
+
+`nerf-watch card` 会把你的结果写成一张 1200x630 的 SVG 图片（X、Bluesky 和链接预览使用的尺寸），可以直接发帖，或附在 GitHub issue 里：
+
+![合成日志上的分享卡片示例：标题为 "Cache writes per turn up 3.3x after Claude Code 2.1.272"，列出两条告警和一条警告及其前后数值，页脚为 "checked with nerf-watch, npx nerf-watch check, github.com/Abelo9996/nerf-watch"](docs/card-example.svg)
+
+```sh
+npx nerf-watch card                              # writes nerf-watch-card.svg
+npx nerf-watch card --since 30d --out card.svg   # same options as check
+```
+
+有检测结果时，标题是最重要的那一条，卡片最多列出三条，每条带严重级别和变化前后的数值。没有检测结果时，卡片会直接写明，例如 "No silent changes in Claude Code or Codex over the last 30 days"，并给出比较了多少条响应、多少个会话、多少天。如果历史数据太少、无法做任何比较，就不会生成卡片，因为这时的"一切正常"没有意义。只要有值得分享的结果，`check` 的最后一行会给出对应的 `card` 命令。
+
+卡片只用 `share` 的匿名数据生成，并运行同样的隐私扫描，所以上面只有智能体名称、CLI 版本、模型 ID、日期和数字。发出去之前仍请先看一眼。卡片使用系统字体，并在查看器支持时跟随浅色或深色模式。
+
+输出只有 SVG，这样安装包里不需要原生图像库。X 和 Bluesky 需要 PNG：用 `rsvg-convert -o nerf-watch-card.png nerf-watch-card.svg` 转换（librsvg：`brew install librsvg` 或 `apt install librsvg2-bin`），或者在浏览器里打开 SVG 截图。`card` 写完文件后会打印这些步骤。
+
 ## 支持的智能体
 
 | 智能体 | 默认位置 | 覆盖方式 |
@@ -175,9 +195,11 @@ nerf-watch check   [--since WHEN] [--agent ID] [--root AGENT=DIR] [--json]
                    [--fail-on alert|warn|never] [--recent-days 7] [--baseline-days 28]
 nerf-watch report  [--since WHEN] [--agent ID] [--root AGENT=DIR] [--json] [--out FILE.md|FILE.json] [--share [--open]]
 nerf-watch share   [--since WHEN] [--agent ID] [--root AGENT=DIR] [--json] [--open]
+nerf-watch card    [--since WHEN] [--agent ID] [--root AGENT=DIR] [--json] [--out FILE.svg]
+                   [--recent-days 7] [--baseline-days 28]
 ```
 
-`WHEN` 可以是日期（`2026-09-01`），也可以是时间跨度（`12h`、`7d`、`4w`）。退出码：0 表示正常，1 表示存在不低于 `--fail-on` 级别的结果，2 表示用法错误，或分享数据未通过隐私扫描。
+`WHEN` 可以是日期（`2026-09-01`），也可以是时间跨度（`12h`、`7d`、`4w`）。退出码：0 表示正常，1 表示存在不低于 `--fail-on` 级别的结果，2 表示用法错误，或分享数据、卡片数据未通过隐私扫描。
 
 ## Agent Skill
 
