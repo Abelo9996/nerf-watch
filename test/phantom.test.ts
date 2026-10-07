@@ -307,6 +307,50 @@ describe("Codex turns", () => {
     expect(flagged(t)).toHaveLength(1);
     expect(JSON.stringify(t)).not.toContain(PROMPT_SENTINEL);
   });
+
+  describe("code mode (an exec call that runs JavaScript calling tools, Codex 0.160+)", () => {
+    // Shapes copied from a real Codex 0.160.0 rollout.
+    const exec = (input: string) => ({ timestamp: "2026-10-07T02:40:50Z", type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: "c", input } });
+    const run = (cmd: string) => `const r = await tools.exec_command({cmd:${JSON.stringify(cmd)},"yield_time_ms":10000,"max_output_tokens":4000}); text(r.output);`;
+    const patch = `const patch = ${JSON.stringify("*** Begin Patch\n*** Update File: pricing.py\n@@\n+def clamp_percent(percent):\n*** End Patch")};\ntext(await tools.apply_patch(patch));`;
+    async function codeTurns(...inputs: string[]) {
+      const f = writeLines(join(tmp(), "rollout-code.jsonl"), [
+        { timestamp: "2026-10-07T02:40:47Z", type: "session_meta", payload: { cli_version: "0.160.0", source: "exec" } },
+        { timestamp: "2026-10-07T02:40:47Z", type: "event_msg", payload: { type: "task_started", turn_id: "t1" } },
+        { timestamp: "2026-10-07T02:40:47Z", type: "turn_context", payload: { turn_id: "t1", model: "gpt-6-luna" } },
+        { timestamp: "2026-10-07T02:40:48Z", type: "event_msg", payload: { type: "item_completed", turn_id: "t1", item: { type: "UserMessage", content: [{ type: "text", text: PROMPT_SENTINEL }] } } },
+        ...inputs.map(exec),
+        { timestamp: "2026-10-07T02:40:58Z", type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: REAL_PHANTOM_MESSAGES[1] }] } },
+        { timestamp: "2026-10-07T02:40:58Z", type: "event_msg", payload: { type: "task_complete", turn_id: "t1", last_agent_message: REAL_PHANTOM_MESSAGES[1] } },
+      ]);
+      return (await parseCodexActivity(f)).turns;
+    }
+
+    it("flags a claim when the code only ran read-only commands", async () => {
+      const t = await codeTurns(run("rg --files -g 'pricing.py'"), run("sed -n '1,240p' pricing.py"));
+      expect(t[0].editAction).toBeUndefined();
+      expect(flagged(t)).toHaveLength(1);
+    });
+
+    it("does not flag a claim after apply_patch inside the code", async () => {
+      const t = await codeTurns(run("sed -n '1,240p' pricing.py"), patch);
+      expect(t[0].editAction).toBe("apply_patch");
+      expect(flagged(t)).toHaveLength(0);
+    });
+
+    it("treats writing commands, unreadable commands, other tools and code without tools as possible edits", async () => {
+      for (const input of [
+        run("sed -i '' 's/a/b/' pricing.py"),
+        "const c = 'cat ' + f; await tools.exec_command({cmd: c});",
+        "await tools.spawn_agent({task: 'x'});",
+        "require('fs').writeFileSync('pricing.py', 'x');",
+      ]) {
+        const t = await codeTurns(run("cat pricing.py"), input);
+        expect(t[0].editAction, input).toBeDefined();
+        expect(flagged(t), input).toHaveLength(0);
+      }
+    });
+  });
 });
 
 describe("analyzePhantoms", () => {

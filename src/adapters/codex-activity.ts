@@ -110,6 +110,39 @@ export async function parseCodexActivity(file: string): Promise<{ turns: Activit
     const v = classifyCommand(cmd);
     action(t, v.readOnly ? undefined : `${tool}: ${v.reason ?? "command"}`, v.history);
   };
+  /**
+   * Codex code mode (0.160+): one `exec` call runs JavaScript that calls tools, e.g.
+   * `tools.exec_command({cmd: "sed -n '1,240p' pricing.py"})` or `tools.apply_patch(patch)`.
+   * Shell commands count as read-only only when every one is a string literal that
+   * classifies as read-only; any other tool, or code we cannot read, is a possible edit.
+   */
+  const codeMode = (t: ActivityTurn, js: string) => {
+    const calls = [...js.matchAll(/\btools\.([A-Za-z_]\w*)\s*\(/g)].map((m) => m[1]);
+    if (!calls.length) return action(t, "exec: code without tool calls");
+    const literal = (s: string) => {
+      try {
+        return JSON.parse(s) as unknown;
+      } catch {
+        return undefined;
+      }
+    };
+    const cmds = [...js.matchAll(/\bcmd\s*:\s*("(?:[^"\\]|\\.)*")/g)].map((m) => literal(m[1]));
+    let shells = 0;
+    for (const name of calls) {
+      if (SHELL_TOOLS.has(name)) shells++;
+      else if (name === "apply_patch") {
+        const m = js.match(/"(\*\*\* Begin Patch(?:[^"\\]|\\.)*)"/);
+        const patch = m ? literal(`"${m[1]}"`) : undefined;
+        if (typeof patch === "string") {
+          edits.patch(patch);
+          action(t, "apply_patch", false, true);
+        } else action(t, "apply_patch");
+      } else action(t, CODEX_READ_ONLY_TOOLS.has(name) ? undefined : `exec: ${name}`);
+    }
+    if (!shells) return;
+    if (cmds.length !== shells || cmds.some((c) => typeof c !== "string")) action(t, "exec: command not readable");
+    else for (const c of cmds) shell(t, c, "exec");
+  };
   const text = (t: ActivityTurn, s: string, line: number, ts: number) => {
     if (!s.trim()) return;
     t.finalMessage = s;
@@ -219,7 +252,8 @@ export async function parseCodexActivity(file: string): Promise<{ turns: Activit
         case "function_call":
         case "custom_tool_call": {
           const name = typeof p.name === "string" ? p.name : "unknown tool";
-          if (name === "apply_patch") {
+          if (name === "exec" && p.type === "custom_tool_call" && typeof p.input === "string") codeMode(t, p.input);
+          else if (name === "apply_patch") {
             const a = p.type === "custom_tool_call" ? p.input : parseArgs(p.arguments).input;
             edits.patch(a);
             action(t, "apply_patch", false, true);
