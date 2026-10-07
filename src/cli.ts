@@ -7,7 +7,8 @@ import { adapters } from "./adapters/index.js";
 import { runDetectors } from "./detectors.js";
 import { cardModel, renderCardSvg } from "./card.js";
 import { bold, checkHeadline, countBySeverity, datasetSummary, dim, formatFinding, SEGMENT_ALIGN, SEGMENT_HEADERS, segmentRows, table, tooLittleHistory } from "./format.js";
-import { loadDataset } from "./load.js";
+import { loadActivity, loadDataset } from "./load.js";
+import { analyzePhantoms, formatPhantomReport, PHANTOM_NOTE } from "./phantom.js";
 import { buildSegments } from "./metrics.js";
 import { buildReport, reportToMarkdown, toolVersion } from "./report.js";
 import { buildSharePayload, localIdentifiers, openInBrowser, scanPayload, shareLink, type SharePayload } from "./share.js";
@@ -234,6 +235,37 @@ async function card(o: CardOpts): Promise<void> {
   for (const line of pngHelp(out)) console.log(dim(line));
 }
 
+interface PhantomOpts extends Common {
+  limit: number;
+}
+
+/**
+ * Turns whose final message claims an edit but that contain no file-modifying
+ * action. Local output only: never part of share, card or report.
+ */
+async function phantom(o: PhantomOpts): Promise<void> {
+  const limit = Number(o.limit);
+  if (!Number.isInteger(limit) || limit < 0) throw new UsageError(`--limit must be a whole number, 0 or more, got "${o.limit}"`);
+  const roots = parseRoots(o.root);
+  const agents = parseAgents(o.agent) ?? (roots ? Object.keys(roots) : undefined);
+  const act = await loadActivity({ since: parseSince(o.since), agents, roots });
+  const r = analyzePhantoms(act.turns, act.files, { limit });
+  if (!r.turns) {
+    const msg = noDataMessage(
+      { turns: [], toolResults: [], events: [], files: act.files, badLines: act.badLines, roots: act.roots, filesFound: act.filesFound },
+      o.since,
+    ).replace("contain model responses with token counts", "contain finished turns");
+    if (o.json) console.log(JSON.stringify({ error: "no-data", message: msg }));
+    else console.log(msg);
+    return;
+  }
+  if (o.json) {
+    console.log(JSON.stringify({ ...r, note: PHANTOM_NOTE }, null, 2));
+    return;
+  }
+  console.log(formatPhantomReport(r, act.turns.filter((t) => !t.sidechain).length));
+}
+
 export function buildCli() {
   const cli = cac("nerf-watch");
 
@@ -305,6 +337,10 @@ export function buildCli() {
     .option("--recent-days <n>", "Recent window for same-version drift checks", { default: 7 })
     .option("--baseline-days <n>", "Baseline window before the recent window", { default: 28 })
     .action(card);
+
+  common(cli.command("phantom", "Find turns where the agent said it changed code but made no edit (local only)"))
+    .option("--limit <n>", "Number of examples to show", { default: 10 })
+    .action(phantom);
 
   common(cli.command("report", "Write an anonymized, shareable report (no prompts, paths or project names)"))
     .option("--out <file>", "Output file; .md or .json picks the format", { default: "nerf-watch-report.md" })

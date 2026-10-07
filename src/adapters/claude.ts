@@ -1,6 +1,7 @@
 import { dirname, join, sep } from "node:path";
 import { normalizeModel } from "../metrics.js";
 import type { Adapter, AgentEvent, DiscoverOptions, ParsedFile, ToolResult, Turn } from "../types.js";
+import { parseClaudeActivity } from "./claude-activity.js";
 import { findFiles, num, readJsonl, sessionKeyFor, splitPathList, toMs, workloadKeyFor } from "./util.js";
 
 /**
@@ -227,6 +228,8 @@ export const claudeAdapter: Adapter = {
     if (stopped.size) for (const t of turns) if (!stopped.has(t)) t.partial = true;
     return { turns, toolResults, events, badLines };
   },
+
+  parseActivity: parseClaudeActivity,
 };
 
 function slashCommand(o: any): string | undefined {

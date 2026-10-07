@@ -19,6 +19,7 @@ Node 20 or newer. No native dependencies; keep it that way so `npx nerf-watch` (
 - **Never commit real session logs**, or anything copied from them: prompts, paths, project names, session ids. Tests use synthetic data from `scripts/make-demo-data.mjs` or records written inline in the test.
 - Nothing may make network requests. nerf-watch is local only.
 - Records produced by adapters (`src/types.ts`) must not carry prompt text, tool output or paths. The CLI test checks reports for planted sentinel strings; keep that test passing.
+- The one exception is `ActivityTurn`, read only by `nerf-watch phantom`: it carries the agent's final message and the session file path for local output, never prompt text, and must never reach `report`, `share` or `card`.
 - Plain, specific wording in output and docs.
 
 ## Adding an adapter
@@ -32,6 +33,7 @@ export interface Adapter {
   defaultRoots(opts): string[];   // where the logs live; read env overrides first
   discover(roots): Promise<string[]>;
   parseFile(file): Promise<{ turns; toolResults; events; badLines }>;
+  parseActivity?(file): Promise<{ turns; badLines }>;  // optional, for `phantom`
 }
 ```
 

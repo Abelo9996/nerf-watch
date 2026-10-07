@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { SENTINEL_CWD, SENTINEL_PROMPT, writeDemo } from "../scripts/make-demo-data.mjs";
-import { tmp } from "./helpers.js";
+import { claudeLines, codexLines, PROMPT_SENTINEL, REAL_PHANTOM_MESSAGES, tmp, writeLines } from "./helpers.js";
 
 const CLI = resolve(__dirname, "..", "dist", "cli.js");
 let roots: string[];
@@ -158,5 +158,71 @@ describe("cli end to end on synthetic logs", () => {
     const d = join(dir, "logs");
     const r = run(["scan", "--json"], { CLAUDE_CONFIG_DIR: join(d, "claude"), CODEX_HOME: join(d, "codex") });
     expect(JSON.parse(r.out).summary.files).toEqual({ claude: 32, codex: 24 });
+  });
+});
+
+describe("phantom", () => {
+  let proots: string[];
+  beforeAll(() => {
+    const d = join(dir, "phantom-logs");
+    writeLines(
+      join(d, "claude", "proj", "session.jsonl"),
+      claudeLines([
+        { prompt: PROMPT_SENTINEL },
+        { tool: "Read", input: { file_path: "/w/wc.py" } },
+        { text: "Added `--words` to wc.py." },
+        { prompt: PROMPT_SENTINEL },
+        { tool: "Edit", input: { file_path: "/w/wc.py", old_string: "a", new_string: "b" } },
+        { text: "Updated `count()` in wc.py." },
+      ]),
+    );
+    writeLines(
+      join(d, "codex", "2026", "10", "03", "rollout-a.jsonl"),
+      codexLines([
+        { prompt: PROMPT_SENTINEL },
+        { exec: "cat wc.py" },
+        { exec: "git status" },
+        { done: REAL_PHANTOM_MESSAGES[0] },
+        { prompt: PROMPT_SENTINEL },
+        { exec: "sed -n '1,80p' pricing.py" },
+        { done: REAL_PHANTOM_MESSAGES[1] },
+      ]),
+    );
+    proots = ["--root", `claude=${join(d, "claude")}`, "--root", `codex=${join(d, "codex")}`];
+  });
+
+  it("prints counts per agent and per version and model, examples and how to check them", () => {
+    const r = run(["phantom", ...proots]);
+    expect(r.code).toBe(0);
+    expect(r.out.split("\n")[0]).toBe("Read 4 turns from 2 session files (claude 1, codex 1), 2026-10-01 to 2026-10-03.");
+    expect(r.out).toContain("3 of 4 turns that claimed an edit (75.0%) had no file-modifying action.");
+    expect(r.out).toMatch(/claude\s+2\.1\.272\s+claude-opus-5\s+2\s+2\s+1\s+50\.0%/);
+    expect(r.out).toMatch(/codex\s+0\.160\.0\s+gpt-6-luna\s+2\s+2\s+2\s+100\.0%/);
+    expect(r.out).toContain('"Extracted the existing clamp logic into `clamp_percent(percent)`');
+    expect(r.out).toContain("rollout-a.jsonl:");
+    expect(r.out).toContain("Detection is heuristic and conservative");
+    expect(r.out).not.toContain(PROMPT_SENTINEL);
+  });
+
+  it("--json and --limit", () => {
+    const r = run(["phantom", "--json", "--limit", "1", ...proots]);
+    expect(r.code).toBe(0);
+    const j = JSON.parse(r.out);
+    expect(j).toMatchObject({ turns: 4, editClaims: 4, phantom: 3 });
+    expect(j.examples).toHaveLength(1);
+    expect(j.examples[0]).toMatchObject({ agent: "codex", cliVersion: "0.160.0", model: "gpt-6-luna" });
+    expect(j.note).toContain("heuristic");
+    expect(r.out).not.toContain(PROMPT_SENTINEL);
+    expect(run(["phantom", "--limit", "x", ...proots]).code).toBe(2);
+  });
+
+  it("works on logs with no edit claims and with no logs", () => {
+    const demo = run(["phantom", ...roots]);
+    expect(demo.code).toBe(0);
+    const empty = tmp();
+    const none = run(["phantom"], { HOME: empty, USERPROFILE: empty, CLAUDE_CONFIG_DIR: join(empty, "c"), CODEX_HOME: join(empty, "x") });
+    expect(none.code).toBe(0);
+    expect(none.out).toContain("No Claude Code or Codex session logs found");
+    expect(run(["--help"]).out).toContain("phantom");
   });
 });

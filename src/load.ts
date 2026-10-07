@@ -2,7 +2,7 @@ import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { adapters as allAdapters } from "./adapters/index.js";
 import { compareVersions } from "./metrics.js";
-import type { Adapter, Dataset, ParsedFile } from "./types.js";
+import type { ActivityTurn, Adapter, Dataset } from "./types.js";
 
 export interface LoadOptions {
   /** Restrict to these adapter ids. */
@@ -18,49 +18,67 @@ export interface LoadOptions {
 
 const CONCURRENCY = 8;
 
+/** Session files for one adapter, after the `since` mtime filter. */
+async function filesFor(adapter: Adapter, opts: LoadOptions, env: NodeJS.ProcessEnv, home: string) {
+  const roots = opts.roots?.[adapter.id] ?? adapter.defaultRoots({ env, homedir: home, platform: process.platform });
+  const found = await adapter.discover(roots);
+  let files = found;
+  if (opts.since !== undefined) {
+    // Files untouched since the cutoff cannot contain newer records.
+    const keep = await Promise.all(
+      files.map(async (f) => {
+        try {
+          return (await stat(f)).mtimeMs >= opts.since!;
+        } catch {
+          return false;
+        }
+      }),
+    );
+    files = files.filter((_, i) => keep[i]);
+  }
+  return { roots, found: found.length, files };
+}
+
+/** Run `parse` over `files` with bounded concurrency. A file that throws yields undefined. */
+async function parseAll<T>(files: string[], parse: (f: string) => Promise<T>): Promise<(T | undefined)[]> {
+  const results: (T | undefined)[] = new Array(files.length);
+  let next = 0;
+  async function worker() {
+    while (next < files.length) {
+      const i = next++;
+      try {
+        results[i] = await parse(files[i]);
+      } catch {
+        results[i] = undefined;
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, files.length) }, worker));
+  return results;
+}
+
+function adapterList(opts: LoadOptions): Adapter[] {
+  return (opts.adapters ?? allAdapters).filter((a) => !opts.agents?.length || opts.agents.includes(a.id));
+}
+
 export async function loadDataset(opts: LoadOptions = {}): Promise<Dataset> {
   const env = opts.env ?? process.env;
   const home = opts.home ?? homedir();
-  const list = (opts.adapters ?? allAdapters).filter((a) => !opts.agents?.length || opts.agents.includes(a.id));
   const ds: Dataset = { turns: [], toolResults: [], events: [], files: {}, badLines: {}, roots: {}, filesFound: {} };
 
-  for (const adapter of list) {
-    const roots = opts.roots?.[adapter.id] ?? adapter.defaultRoots({ env, homedir: home, platform: process.platform });
-    let files = await adapter.discover(roots);
+  for (const adapter of adapterList(opts)) {
+    const { roots, found, files } = await filesFor(adapter, opts, env, home);
     ds.roots![adapter.id] = roots;
-    ds.filesFound![adapter.id] = files.length;
-    if (opts.since !== undefined) {
-      // Files untouched since the cutoff cannot contain newer records.
-      const keep = await Promise.all(
-        files.map(async (f) => {
-          try {
-            return (await stat(f)).mtimeMs >= opts.since!;
-          } catch {
-            return false;
-          }
-        }),
-      );
-      files = files.filter((_, i) => keep[i]);
-    }
+    ds.filesFound![adapter.id] = found;
     ds.files[adapter.id] = files.length;
     ds.badLines[adapter.id] = 0;
 
-    const results: (ParsedFile & { badLines: number })[] = new Array(files.length);
-    let next = 0;
-    async function worker() {
-      while (next < files.length) {
-        const i = next++;
-        try {
-          results[i] = await adapter.parseFile(files[i]);
-        } catch {
-          ds.badLines[adapter.id]++;
-        }
-      }
-    }
-    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, files.length) }, worker));
-
+    const results = await parseAll(files, (f) => adapter.parseFile(f));
     for (const r of results) {
-      if (!r) continue;
+      if (!r) {
+        ds.badLines[adapter.id]++;
+        continue;
+      }
       ds.badLines[adapter.id] += r.badLines;
       ds.turns.push(...r.turns);
       ds.toolResults.push(...r.toolResults);
@@ -141,4 +159,55 @@ export function dropStaleCopies(ds: Dataset): void {
   ds.turns = ds.turns.filter((t) => !stale(t));
   ds.toolResults = ds.toolResults.filter((t) => !stale(t));
   ds.events = ds.events.filter((e) => !stale(e));
+}
+
+export interface ActivityDataset {
+  turns: ActivityTurn[];
+  /** Session files read per agent. */
+  files: Record<string, number>;
+  badLines: Record<string, number>;
+  roots: Record<string, string[]>;
+  filesFound: Record<string, number>;
+}
+
+/**
+ * Read user turns (prompt through final message) for `nerf-watch phantom`.
+ * Same discovery, `since` and `agents` handling as loadDataset. Adapters
+ * without `parseActivity` are skipped.
+ */
+export async function loadActivity(opts: LoadOptions = {}): Promise<ActivityDataset> {
+  const env = opts.env ?? process.env;
+  const home = opts.home ?? homedir();
+  const out: ActivityDataset = { turns: [], files: {}, badLines: {}, roots: {}, filesFound: {} };
+  for (const adapter of adapterList(opts)) {
+    const parse = adapter.parseActivity;
+    if (!parse) continue;
+    const { roots, found, files } = await filesFor(adapter, opts, env, home);
+    out.roots[adapter.id] = roots;
+    out.filesFound[adapter.id] = found;
+    out.files[adapter.id] = files.length;
+    out.badLines[adapter.id] = 0;
+    for (const r of await parseAll(files, (f) => parse(f))) {
+      if (!r) {
+        out.badLines[adapter.id]++;
+        continue;
+      }
+      out.badLines[adapter.id] += r.badLines;
+      out.turns.push(...r.turns);
+    }
+  }
+  // Resumed and forked sessions copy earlier turns into new files.
+  const seen = new Set<string>();
+  out.turns = out.turns.filter((t) => {
+    if (!t.dedupeKey) return true;
+    if (seen.has(t.dedupeKey)) return false;
+    seen.add(t.dedupeKey);
+    return true;
+  });
+  if (opts.since !== undefined) {
+    const s = opts.since;
+    out.turns = out.turns.filter((t) => t.timestamp >= s);
+  }
+  out.turns.sort((a, b) => a.timestamp - b.timestamp);
+  return out;
 }

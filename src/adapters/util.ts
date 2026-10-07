@@ -38,19 +38,24 @@ export async function dirExists(p: string): Promise<boolean> {
   }
 }
 
-/** Stream a file line by line. Lines that fail `filter` are never JSON-parsed. */
+/**
+ * Stream a file line by line. Lines that fail `filter` are never JSON-parsed.
+ * `line` is the 1-based line number in the file.
+ */
 export async function* readJsonl(
   file: string,
   filter?: (line: string) => boolean,
-): AsyncGenerator<{ value: any } | { bad: true }> {
+): AsyncGenerator<{ value: any; line: number } | { bad: true; line: number }> {
   const rl = createInterface({ input: createReadStream(file, { encoding: "utf8" }), crlfDelay: Infinity });
+  let n = 0;
   for await (const line of rl) {
+    n++;
     if (!line) continue;
     if (filter && !filter(line)) continue;
     try {
-      yield { value: JSON.parse(line) };
+      yield { value: JSON.parse(line), line: n };
     } catch {
-      yield { bad: true };
+      yield { bad: true, line: n };
     }
   }
 }

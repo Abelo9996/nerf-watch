@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `nerf-watch phantom` finds phantom edits in your own history: turns (one prompt through the agent's final message for it) whose final message claims a finished edit to named code, such as "Added `--words` to wc.py.", while nothing in the turn could have changed a file. Edit, Write, MultiEdit and NotebookEdit (Claude Code), `apply_patch` and file changes (Codex), subagents, unknown tools and any shell command not known to be read-only all count as possible edits. Plans, hedges, negations, questions, offers, interrupted or errored turns, subagent transcripts, turns that ran `git diff`, `log`, `show` or `blame`, and claims that name something an earlier turn of the session edited are not flagged. It prints counts per agent and per (CLI version, model), the phantom rate among edit claims, and up to `--limit` examples (default 10) with the claim and the session file and line to check; `--json` for scripts. It never reads prompt text into its records, and its results are not part of `report`, `share` or `card`. Background: https://abelo9996.github.io/open-agent-lab/findings/2026-10-rerun-10x/
+- Claude Code plugin command `/nerf-watch:phantom`.
+- `loadActivity`, `analyzePhantoms`, `findEditClaim` and `classifyCommand` in the library API, and an optional `parseActivity` method on adapters.
+
 ## [0.3.0] - Unreleased
 
 ### Added

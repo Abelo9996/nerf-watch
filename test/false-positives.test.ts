@@ -4,12 +4,15 @@
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { claudeAdapter } from "../src/adapters/claude.js";
+import { parseClaudeActivity } from "../src/adapters/claude-activity.js";
+import { parseCodexActivity } from "../src/adapters/codex-activity.js";
 import { codexAdapter } from "../src/adapters/codex.js";
 import { detectEffortDrops, detectModelMismatch, detectTimeShifts, detectVersionShifts, runDetectors } from "../src/detectors.js";
 import { dropStaleCopies, loadDataset } from "../src/load.js";
 import { buildSegments } from "../src/metrics.js";
+import { judgeTurn } from "../src/phantom.js";
 import type { Dataset, ToolResult, Turn } from "../src/types.js";
-import { tmp, writeLines } from "./helpers.js";
+import { claudeLines, codexLines, tmp, writeLines } from "./helpers.js";
 
 const DAY = 86_400_000;
 const T0 = Date.UTC(2026, 6, 1);
@@ -449,5 +452,94 @@ describe("context window", () => {
     expect(f?.severity).toBe("warn");
     expect(f?.evidence.map((e) => e.sampleUnit)).toEqual(["turns", "turns"]);
     expect(f?.nextStep).toBeTruthy();
+  });
+});
+
+// Phantom edits: shapes of final messages and turns from real logs that a
+// looser rule would have flagged. None of them is an edit claim without an edit.
+describe("phantom edits", () => {
+  const verdicts = async (steps: Parameters<typeof claudeLines>[0]) => {
+    const f = writeLines(join(tmp(), "proj", "s.jsonl"), claudeLines(steps));
+    return (await parseClaudeActivity(f)).turns.map((t) => judgeTurn(t));
+  };
+  const phantoms = (v: Awaited<ReturnType<typeof verdicts>>) => v.filter((x) => x.kind === "scanned" && x.phantom).length;
+
+  it("does not flag a recap of an edit made by an earlier turn", async () => {
+    // Seen on real logs: a later answer restates "Deleted the block ..." with no tool calls.
+    const v = await verdicts([
+      { prompt: "p" },
+      { tool: "Edit", input: { file_path: "/w/petition.md", old_string: "old", new_string: "new" } },
+      { text: "Done." },
+      { prompt: "q" },
+      { text: "Deleted the block in petition.md that listed earlier attempts." },
+    ]);
+    expect(phantoms(v)).toBe(0);
+    expect(v[1]).toMatchObject({ unflagged: "recap" });
+  });
+
+  it("does not flag a recap when the earlier edit was a shell command", async () => {
+    // Seen on real logs: "I moved it there ..." after an earlier turn ran mv.
+    const v = await verdicts([
+      { prompt: "p" },
+      { tool: "Bash", input: { command: "mv form.pdf do_not_upload/" } },
+      { text: "Done." },
+      { prompt: "q" },
+      { tool: "Bash", input: { command: "ls do_not_upload" } },
+      { text: "I moved `form.pdf` to do_not_upload/ so it cannot be uploaded by accident." },
+    ]);
+    expect(phantoms(v)).toBe(0);
+  });
+
+  it("still flags a new claim when earlier edits touched other files", async () => {
+    const v = await verdicts([
+      { prompt: "p" },
+      { tool: "Edit", input: { file_path: "/w/readme.md", old_string: "a", new_string: "b" } },
+      { text: "Done." },
+      { prompt: "q" },
+      { tool: "Read", input: { file_path: "/w/wc.py" } },
+      { text: "Added `--words` to wc.py." },
+    ]);
+    expect(phantoms(v)).toBe(1);
+  });
+
+  it("does not flag bold labels that describe what already exists", async () => {
+    // Seen on real logs: a read-only walkthrough of a site listing "**Fixed header** - brand + nav ...".
+    const v = await verdicts([
+      { prompt: "p" },
+      { tool: "Read", input: { file_path: "/w/index.html" } },
+      { text: "Here is what the site has:\n- **Fixed header** - brand and nav in `index.html`, dark on scroll.\n- **Updated gallery**: 18 photos." },
+    ]);
+    expect(phantoms(v)).toBe(0);
+  });
+
+  it("does not flag a summary of changes the turn read with git diff or git log", async () => {
+    const f = writeLines(
+      join(tmp(), "rollout-review.jsonl"),
+      codexLines([{ prompt: "p" }, { exec: "git diff main...HEAD" }, { done: "Added `retry()` to client.ts and updated the tests in client.test.ts." }]),
+    );
+    const t = (await parseCodexActivity(f)).turns;
+    expect(judgeTurn(t[0])).toMatchObject({ phantom: false, unflagged: "history" });
+  });
+
+  it("does not split a turn at a subagent hand-back", async () => {
+    // Background subagents report back as non-human user records; their edits belong to the turn that started them.
+    const v = await verdicts([
+      { prompt: "p" },
+      { tool: "Agent", input: { prompt: "do it" } },
+      { text: "Started." },
+      { prompt: "[Subagent hand-back]", origin: "peer" },
+      { text: "Updated `clamp_percent` in pricing.py." },
+    ]);
+    expect(v).toHaveLength(1);
+    expect(phantoms(v)).toBe(0);
+  });
+
+  it("does not flag an offer to make the change", async () => {
+    const v = await verdicts([
+      { prompt: "p" },
+      { tool: "Read", input: { file_path: "/w/wc.py" } },
+      { text: "Here's the proposed change:\n- Added `--words` to wc.py\n\nWant me to apply it?" },
+    ]);
+    expect(phantoms(v)).toBe(0);
   });
 });

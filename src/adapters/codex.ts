@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import type { Adapter, AgentEvent, DiscoverOptions, ParsedFile, ToolResult, Turn } from "../types.js";
+import { parseCodexActivity } from "./codex-activity.js";
 import { findFiles, num, readJsonl, sessionKeyFor, splitPathList, toMs, workloadKeyFor } from "./util.js";
 
 /**
@@ -147,4 +148,6 @@ export const codexAdapter: Adapter = {
 
     return { turns, toolResults, events, badLines };
   },
+
+  parseActivity: parseCodexActivity,
 };

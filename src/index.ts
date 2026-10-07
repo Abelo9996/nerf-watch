@@ -1,6 +1,21 @@
 export * from "./types.js";
 export { adapters, getAdapter, claudeAdapter, codexAdapter } from "./adapters/index.js";
-export { loadDataset, dropStaleCopies, type LoadOptions } from "./load.js";
+export { loadDataset, loadActivity, dropStaleCopies, type LoadOptions, type ActivityDataset } from "./load.js";
+export {
+  analyzePhantoms,
+  formatPhantomReport,
+  findEditClaim,
+  classifyCommand,
+  commandText,
+  judgeTurn,
+  FINDINGS_URL,
+  PHANTOM_NOTE,
+  type PhantomReport,
+  type PhantomGroup,
+  type PhantomExample,
+  type CommandVerdict,
+  type TurnVerdict,
+} from "./phantom.js";
 export { buildSegments, METRICS, MIN, MIN_STRATUM, median, normalizeModel, compareVersions } from "./metrics.js";
 export {
   runDetectors,

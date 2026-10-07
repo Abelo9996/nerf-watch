@@ -139,6 +139,66 @@ export interface Adapter {
   discover(roots: string[]): Promise<string[]>;
   /** Parse one session file. Must tolerate truncated and malformed lines. */
   parseFile(file: string): Promise<ParsedFile & { badLines: number }>;
+  /**
+   * Split one session file into user turns for `nerf-watch phantom`. Optional:
+   * agents without it are skipped by that command.
+   */
+  parseActivity?(file: string): Promise<{ turns: ActivityTurn[]; badLines: number }>;
+}
+
+/**
+ * One user turn: a user prompt through the agent's final message for it, as
+ * read by `nerf-watch phantom`.
+ *
+ * Unlike the records above, this one carries the agent's final message and the
+ * session file path, so it is for local output only and must never reach
+ * share, card or report. It never carries prompt text.
+ */
+export interface ActivityTurn {
+  agent: AgentId;
+  /** Session file the turn came from. Printed locally so the user can check an example. */
+  file: string;
+  /** 1-based line of the final message in `file`. */
+  line: number;
+  /** Used to drop copies of the same turn across files (resumed or forked sessions). */
+  dedupeKey?: string;
+  /** Time of the final message, epoch ms. */
+  timestamp: number;
+  cliVersion?: string;
+  model?: string;
+  /** The agent's last message in the turn, after its last tool call. Empty when the turn ended on a tool call. */
+  finalMessage: string;
+  /** Tool calls and commands in the turn. */
+  toolCalls: number;
+  /**
+   * The first action in the turn that changed, or could have changed, a file:
+   * an edit tool, a patch, a shell command not known to be read-only, a
+   * subagent, or any tool nerf-watch does not know. Undefined when every
+   * action was read-only.
+   */
+  editAction?: string;
+  /** The turn ran a command that shows existing changes (git diff, log, show, blame). */
+  viewedHistory?: boolean;
+  /** The turn was interrupted, a tool call was rejected, or the API returned an error. */
+  incomplete?: boolean;
+  /** Subagent turn. Skipped by `phantom`, since its "user" is another agent. */
+  sidechain?: boolean;
+  /**
+   * Edits made by earlier turns of the same session file: the first `count`
+   * entries of `edits` (the array is shared by every turn of the file). A claim
+   * that names something an earlier turn edited may be a recap, not a claim.
+   */
+  prior?: { edits: EditRecord[]; count: number };
+}
+
+/** What one turn's edits touched, for telling a recap of earlier work from a new claim. */
+export interface EditRecord {
+  /** At least one edit has an unknown target: a shell command, a subagent or a tool nerf-watch does not know. */
+  opaque: boolean;
+  /** Files the edit tools and patches named. */
+  paths: string[];
+  /** New text from edit tools and patches, capped at EDIT_TEXT_MAX characters. */
+  text: string;
 }
 
 export type Severity = "info" | "warn" | "alert";

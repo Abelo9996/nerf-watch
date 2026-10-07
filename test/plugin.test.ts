@@ -29,9 +29,9 @@ describe("agent plugin files", () => {
     expect(existsSync(path.join(REPO, manifest.interface.screenshots[0]))).toBe(true);
   });
 
-  it("ships /nerf-watch:check and /nerf-watch:share, which run only when the user asks", () => {
+  it("ships /nerf-watch:check, /nerf-watch:phantom and /nerf-watch:share, which run only when the user asks", () => {
     const files = readdirSync(path.join(REPO, "commands")).filter((f) => f.endsWith(".md"));
-    expect(files.sort()).toEqual(["check.md", "share.md"]);
+    expect(files.sort()).toEqual(["check.md", "phantom.md", "share.md"]);
     for (const f of files) {
       const text = readFileSync(path.join(REPO, "commands", f), "utf8").replace(/\r\n/g, "\n");
       const front = /^---\n([\s\S]*?)\n---\n/.exec(text)?.[1] ?? "";

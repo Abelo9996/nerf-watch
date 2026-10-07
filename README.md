@@ -28,6 +28,7 @@ npx nerf-watch check --since 30d --agent claude
 npx nerf-watch report --out nerf-watch-report.md   # anonymized, shareable
 npx nerf-watch share                         # contribute findings to the public regression watch
 npx nerf-watch card                          # a 1200x630 image of your result to post
+npx nerf-watch phantom                       # turns where the agent said it changed code but made no edit
 ```
 
 Homebrew (macOS and Linux): `brew install abelo9996/tap/nerf-watch`, then run `nerf-watch check` without `npx`.
@@ -41,7 +42,7 @@ Inside Claude Code:
 /plugin install nerf-watch@open-agent-lab
 ```
 
-Then run `/reload-plugins` or start a new session. The plugin adds the nerf-watch skill and two commands: `/nerf-watch:check` runs `check` and explains the findings (pass flags such as `--since 30d --agent claude`), and `/nerf-watch:share` prints the anonymized payload and the prefilled issue link for the regression watch without opening or submitting anything. Both run the CLI through `npx -y nerf-watch`, so there is nothing else to install. From a shell: `claude plugin marketplace add Abelo9996/open-agent-lab`, then `claude plugin install nerf-watch@open-agent-lab`.
+Then run `/reload-plugins` or start a new session. The plugin adds the nerf-watch skill and three commands: `/nerf-watch:check` runs `check` and explains the findings (pass flags such as `--since 30d --agent claude`), `/nerf-watch:share` prints the anonymized payload and the prefilled issue link for the regression watch without opening or submitting anything, and `/nerf-watch:phantom` runs `phantom` and summarizes it. All run the CLI through `npx -y nerf-watch`, so there is nothing else to install. From a shell: `claude plugin marketplace add Abelo9996/open-agent-lab`, then `claude plugin install nerf-watch@open-agent-lab`.
 
 ## Install as a Codex plugin
 
@@ -206,6 +207,7 @@ Details per agent:
 - Read the report before you share it. It is plain markdown or JSON.
 - `nerf-watch share` builds an even smaller payload (see below), prints it in full, and only then prints a link. Opening that link and pressing submit is the only way anything leaves your machine.
 - `nerf-watch card` draws an image from that same payload, after the same scan. Nothing on it can be a path, project name, user name or session id.
+- `nerf-watch phantom` is for your eyes only. It prints the agent's own claim sentences and the local session file paths so you can check each example. It never reads your prompt text into its records or prints it, and its results are not part of `report`, `share` or `card`.
 
 ## Sharing with the regression watch
 
@@ -241,6 +243,25 @@ The card is built only from the anonymized `share` payload and runs the same pri
 
 The output is SVG only, so the package stays free of native image libraries. X and Bluesky need a PNG: convert with `rsvg-convert -o nerf-watch-card.png nerf-watch-card.svg` (librsvg: `brew install librsvg` or `apt install librsvg2-bin`), or open the SVG in a browser and take a screenshot. `card` prints these steps after writing the file.
 
+## Phantom edits
+
+In a [rerun of 10 tasks 10 times each](https://abelo9996.github.io/open-agent-lab/findings/2026-10-rerun-10x/), 3 of 100 headless runs of Codex CLI 0.160.0 with gpt-6-luna read a file, made no edit, exited 0, and ended with a message saying the change was done, such as "Added `--words` to wc.py." `nerf-watch phantom` looks for the same thing in your own history:
+
+```sh
+npx nerf-watch phantom                       # all local Claude Code and Codex logs
+npx nerf-watch phantom --since 30d --limit 20
+npx nerf-watch phantom --json
+```
+
+It splits each session into turns (one prompt of yours through the agent's final message for it) and flags a turn when both are true:
+
+1. **The final message claims a finished edit.** A sentence starts with a past-tense edit verb ("Added", "Updated", "Extracted", "Fixed", "I've renamed", ...) and names code: a file name or a `code span`. Plans ("I'll add"), hedges ("should", "could"), negations ("no changes were needed", "already handles"), questions, offers ("want me to apply it?") and bold list labels do not count.
+2. **Nothing in the turn could have changed a file.** No Edit, Write, MultiEdit or NotebookEdit call (Claude Code), no `apply_patch` or file change (Codex), no subagent, no tool nerf-watch does not know, and no shell command unless every part of it is known to be read-only (`cat`, `sed -n`, `rg`, `ls`, `find` without `-delete` or `-exec`, `git status`, and so on). Redirection, `tee`, `sed -i`, `mv`, `rm`, scripts, package managers and anything unrecognized count as possible edits.
+
+It prints, per agent and per (CLI version, model), the finished turns, the turns whose final message claimed an edit, the phantom turns, and the phantom rate among edit claims, then up to 10 examples (`--limit`) with the date, agent, CLI version, model, the claim and the session file and line to check.
+
+It is built to avoid false accusations, so it misses more than it catches. It also skips interrupted or errored turns, subagent transcripts, claims in turns that ran `git diff`, `log`, `show` or `blame` (they may describe existing changes), and claims that name something an earlier turn of the same session edited (they may be a recap). Treat a flagged turn as something to check: open the file at the line shown and read back to your prompt.
+
 ## Supported agents
 
 | Agent | Default location | Override |
@@ -260,6 +281,7 @@ nerf-watch report  [--since WHEN] [--agent ID] [--root AGENT=DIR] [--json] [--ou
 nerf-watch share   [--since WHEN] [--agent ID] [--root AGENT=DIR] [--json] [--open]
 nerf-watch card    [--since WHEN] [--agent ID] [--root AGENT=DIR] [--json] [--out FILE.svg]
                    [--recent-days 7] [--baseline-days 28]
+nerf-watch phantom [--since WHEN] [--agent ID] [--root AGENT=DIR] [--json] [--limit 10]
 ```
 
 `WHEN` is a date (`2026-09-01`) or a span (`12h`, `7d`, `4w`). Exit codes: 0 ok, 1 findings at or above `--fail-on`, 2 usage error or a share or card payload that failed the privacy scan.

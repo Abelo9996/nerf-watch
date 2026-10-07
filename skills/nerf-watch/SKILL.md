@@ -19,9 +19,14 @@ Run it with `npx nerf-watch <command>` (or `nerf-watch <command>` if installed).
 6. **Offer to contribute to the public regression watch** when there are warnings or alerts and the user wants others to see them: `npx nerf-watch share`. It prints the exact anonymized JSON that would be shared and a prefilled GitHub issue link on open-agent-lab. It makes no network request. Show the user the printed JSON and let them open the link and submit the issue themselves; only pass `--open` if they ask you to open it. Never submit the issue on their behalf. If `share` exits 2, it found something identifying in the payload and printed nothing; do not work around it.
 7. **Offer a share card** when the user wants to post the result (X, Bluesky, a GitHub issue), including an all-clear: `npx nerf-watch card` writes `nerf-watch-card.svg` (1200x630) from the same anonymized payload as `share`, after the same privacy scan. Pass the same `--since` and `--agent` the user checked with. Show the user the printed headline and tell them to look at the image before posting. The output is SVG only; for X or Bluesky they need a PNG, which `card` explains how to make (`rsvg-convert`, or a browser screenshot). If it says there is too little history, there is no card to make yet. If `card` exits 2 because of the privacy scan, it wrote nothing; do not work around it.
 
+## Phantom edits
+
+When the user asks whether the agent claimed changes it did not make (it said "done" but the file did not change, or it "lies about edits"), run `npx nerf-watch phantom`. It finds turns whose final message claims a finished edit to named code ("Added `--words` to wc.py.") while every action in the turn was read-only. It prints counts per agent and per (CLI version, model), the phantom rate among edit claims, and up to 10 examples (`--limit`) with the claim and the local session file and line. It exits 0. Detection is heuristic and conservative: it misses phantom edits worded other ways, and a flagged turn is something for the user to check, not proof. Its output includes the agent's claim sentences and local file paths, so it is never part of `report`, `share` or `card`; do not paste it into a public issue for the user.
+
 ## Useful flags
 
 - `--json` on any command for machine-readable output; prefer it when you need to process results.
+- `--limit N` on `phantom` sets how many examples to show (default 10).
 - `--fail-on warn|alert|never` controls the exit code of `check` (default `alert`), for scripts and CI.
 - `--root claude=DIR` / `--root codex=DIR` when logs live somewhere unusual. `--root` limits the run to the agents it names. `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are honored automatically.
 

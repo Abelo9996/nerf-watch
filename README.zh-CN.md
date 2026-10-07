@@ -28,6 +28,7 @@ npx nerf-watch check --since 30d --agent claude
 npx nerf-watch report --out nerf-watch-report.md   # anonymized, shareable
 npx nerf-watch share                         # contribute findings to the public regression watch
 npx nerf-watch card                          # a 1200x630 image of your result to post
+npx nerf-watch phantom                       # turns where the agent said it changed code but made no edit
 ```
 
 Homebrew（macOS 和 Linux）：`brew install abelo9996/tap/nerf-watch`，之后直接运行 `nerf-watch check`，无需 `npx`。
@@ -41,7 +42,7 @@ Homebrew（macOS 和 Linux）：`brew install abelo9996/tap/nerf-watch`，之后
 /plugin install nerf-watch@open-agent-lab
 ```
 
-然后运行 `/reload-plugins` 或开一个新会话。插件会加入 nerf-watch skill 和两个命令：`/nerf-watch:check` 运行 `check` 并解释结果（可以带上 `--since 30d --agent claude` 这类参数）；`/nerf-watch:share` 打印匿名化的内容和回归观察站的预填 issue 链接，不会打开或提交任何东西。两者都通过 `npx -y nerf-watch` 运行 CLI，不需要另外安装。在终端里也可以：`claude plugin marketplace add Abelo9996/open-agent-lab`，然后 `claude plugin install nerf-watch@open-agent-lab`。
+然后运行 `/reload-plugins` 或开一个新会话。插件会加入 nerf-watch skill 和三个命令：`/nerf-watch:check` 运行 `check` 并解释结果（可以带上 `--since 30d --agent claude` 这类参数）；`/nerf-watch:share` 打印匿名化的内容和回归观察站的预填 issue 链接，不会打开或提交任何东西；`/nerf-watch:phantom` 运行 `phantom` 并总结结果。它们都通过 `npx -y nerf-watch` 运行 CLI，不需要另外安装。在终端里也可以：`claude plugin marketplace add Abelo9996/open-agent-lab`，然后 `claude plugin install nerf-watch@open-agent-lab`。
 
 ## 作为 Codex 插件安装
 
@@ -165,6 +166,7 @@ token 类和工具错误类检测，只有当变化在至少两个项目内部�
 - 分享之前请先自己读一遍报告。它就是普通的 markdown 或 JSON。
 - `nerf-watch share` 会生成一份更小的数据（见下文），先完整打印出来，然后才打印链接。只有当你打开这个链接并点击提交时，数据才会离开你的机器。
 - `nerf-watch card` 用同一份数据画图，并经过同样的扫描。图上不可能出现路径、项目名称、用户名或会话 ID。
+- `nerf-watch phantom` 的输出只给你自己看。它会打印智能体自己写的那句声明，以及本地会话文件的路径，方便你逐条核对。它从不把你的 prompt 文本读进它的记录，也从不打印出来；它的结果不会进入 `report`、`share` 或 `card`。
 
 ## 分享到回归观察页
 
@@ -200,6 +202,25 @@ npx nerf-watch card --since 30d --out card.svg   # same options as check
 
 输出只有 SVG，这样安装包里不需要原生图像库。X 和 Bluesky 需要 PNG：用 `rsvg-convert -o nerf-watch-card.png nerf-watch-card.svg` 转换（librsvg：`brew install librsvg` 或 `apt install librsvg2-bin`），或者在浏览器里打开 SVG 截图。`card` 写完文件后会打印这些步骤。
 
+## 幻影修改（phantom edits）
+
+在[一次 10 个任务、每个重跑 10 次的实验](https://abelo9996.github.io/open-agent-lab/findings/2026-10-rerun-10x/)中，Codex CLI 0.160.0 搭配 gpt-6-luna 的 100 次无界面运行里，有 3 次读了文件、没有做任何修改、以状态码 0 退出，最后一条消息却说改动已经完成，例如 "Added `--words` to wc.py."。`nerf-watch phantom` 会在你自己的历史记录里找同样的情况：
+
+```sh
+npx nerf-watch phantom                       # all local Claude Code and Codex logs
+npx nerf-watch phantom --since 30d --limit 20
+npx nerf-watch phantom --json
+```
+
+它把每个会话切分成轮次（你的一条 prompt，到智能体针对它的最后一条消息为止），同时满足以下两点的轮次会被标出：
+
+1. **最后一条消息声称已经完成了修改。** 某个句子以过去时的修改动词开头（"Added"、"Updated"、"Extracted"、"Fixed"、"I've renamed" 等），并且提到了代码：一个文件名或一段 `代码`。计划（"I'll add"）、不确定的说法（"should"、"could"）、否定（"no changes were needed"、"already handles"）、问句、提议（"want me to apply it?"）以及加粗的列表标签都不算。
+2. **这一轮里没有任何可能改动文件的操作。** 没有 Edit、Write、MultiEdit 或 NotebookEdit 调用（Claude Code），没有 `apply_patch` 或文件变更（Codex），没有子智能体，没有 nerf-watch 不认识的工具；shell 命令只有在每一部分都确定是只读时才不算修改（`cat`、`sed -n`、`rg`、`ls`、不带 `-delete` 或 `-exec` 的 `find`、`git status` 等）。重定向、`tee`、`sed -i`、`mv`、`rm`、脚本、包管理器以及任何无法识别的命令，都算作可能的修改。
+
+它会按智能体、按（CLI 版本，模型）分别打印：完成的轮次数、最后一条消息声称做了修改的轮次数、幻影轮次数，以及幻影轮次占声称修改轮次的比例；然后列出最多 10 个例子（`--limit`），包括日期、智能体、CLI 版本、模型、那句声明，以及用于核对的会话文件和行号。
+
+它的设计目标是避免冤枉智能体，所以漏掉的会比抓到的多。它还会跳过被中断或出错的轮次、子智能体的对话记录、运行过 `git diff`、`log`、`show` 或 `blame` 的轮次里的声明（它们可能是在描述已有的改动），以及提到同一会话中更早轮次修改过的内容的声明（它们可能是在回顾）。把被标出的轮次当作需要核对的线索：在显示的行号打开文件，往回读到你的 prompt。
+
 ## 支持的智能体
 
 | 智能体 | 默认位置 | 覆盖方式 |
@@ -219,6 +240,7 @@ nerf-watch report  [--since WHEN] [--agent ID] [--root AGENT=DIR] [--json] [--ou
 nerf-watch share   [--since WHEN] [--agent ID] [--root AGENT=DIR] [--json] [--open]
 nerf-watch card    [--since WHEN] [--agent ID] [--root AGENT=DIR] [--json] [--out FILE.svg]
                    [--recent-days 7] [--baseline-days 28]
+nerf-watch phantom [--since WHEN] [--agent ID] [--root AGENT=DIR] [--json] [--limit 10]
 ```
 
 `WHEN` 可以是日期（`2026-09-01`），也可以是时间跨度（`12h`、`7d`、`4w`）。退出码：0 表示正常，1 表示存在不低于 `--fail-on` 级别的结果，2 表示用法错误，或分享数据、卡片数据未通过隐私扫描。
