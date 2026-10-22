@@ -6,9 +6,9 @@ English | [简体中文](README.zh-CN.md)
 
 ![nerf-watch check run on synthetic Claude Code logs, flagging a silent model swap from claude-opus-5 to claude-sonnet-5, a cache-write jump and a cache hit rate collapse after a CLI update](docs/demo.gif)
 
-Find what is eating your Claude Code and Codex limits, fix it in one command, and prove it from your own logs.
+See what loads into every Claude Code session before you type, cut the parts you never use in one command, and prove it from your own logs.
 
-Every request pays for the context loaded before you type: the system prompt, your CLAUDE.md / AGENTS.md, MCP tool schemas, the listing of every skill and subagent, plugins, and context that hooks inject at session start. It is the hidden drain on your usage limits. nerf-watch attributes it to real sources straight from your logs (free, no config edited), applies reversible fixes you choose, and then compares your sessions before and after so you can see it worked. Everything runs locally. Nothing is uploaded.
+Every request carries the context loaded before you type: the system prompt, your CLAUDE.md / AGENTS.md, MCP tool schemas, the listing of every skill and subagent, plugins, and context that hooks inject at session start. Install a few plugins and it grows quietly, and most of it is skills and agents you never call. How much that costs you depends on how you work: in short sessions it is most of every request, in long ones a smaller share (nerf-watch shows both from your logs, and most of it is usually served from the prompt cache, which is cheaper than fresh input). nerf-watch attributes it to real sources straight from your logs (free, no config edited), applies reversible fixes you choose, and then compares your sessions before and after so you can see it worked. Everything runs locally. Nothing is uploaded.
 
 ## Quickstart
 
@@ -59,7 +59,7 @@ npx nerf-watch fix --apply --item stash-skills:gsd,stash-agents:gsd   # apply on
 npx nerf-watch undo                                                    # exact restore, byte for byte
 ```
 
-`proof` compares your sessions from before and after the fix timestamp (the newest fix backup, or `--since-fix`): the attachment-based startup the fix removes, the real first-turn usage, tokens per turn, cache hit rate, and how many more sessions fit in a usage window. It is honest when there are too few sessions yet to say.
+`proof` compares your sessions from before and after the fix timestamp (the newest fix backup, or `--since-fix`): the attachment-based startup the fix removes, the real first-turn usage, tokens per turn, cache hit rate, and how much of each request the change saves. It is honest when there are too few sessions yet to say.
 
 ### It also catches silent regressions
 

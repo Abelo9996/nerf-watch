@@ -2,7 +2,7 @@
  * `nerf-watch proof`: did the fix actually help? Compares your own sessions from
  * before and after a fix timestamp, on the same agent and model, and reports
  * startup tokens, tokens per turn, cache hit rate, and an estimate of how many
- * more sessions fit in a usage window. Honest when there are too few sessions
+ * much of each request the startup change removes. Honest when there are too few sessions
  * on either side to say anything yet.
  */
 import type { Dataset, Turn } from "./types.js";
@@ -30,8 +30,12 @@ export interface ProofRow {
   startup: ProofMetric;
   perTurn: ProofMetric;
   cacheHit: ProofMetric;
-  /** Rough extra sessions per usage window as a ratio (before startup / after startup), or null. */
-  extraSessionRatio: number | null;
+  /**
+   * Share of a typical warm request's prompt that the startup change removes:
+   * (startup before - startup after) / per-turn prompt before. The startup context rides along on every request,
+   * so this is the honest per-request saving. Null when either side is missing.
+   */
+  requestShare: number | null;
   /** Enough data on both sides for at least the startup comparison. */
   ready: boolean;
 }
@@ -77,8 +81,9 @@ export function buildProof(ds: Dataset, fixTimestamp: number): ProofReport {
     const perTurn = metric(beforeWarm, afterWarm, (ts) => median(ts.map(promptTokens)), PROOF_MIN.warmTurns);
     const cacheHit = metric(beforeWarm, afterWarm, (ts) => cacheHitRate(ts), PROOF_MIN.warmTurns);
     const ready = startup.before !== null && startup.after !== null;
-    const extraSessionRatio = ready && startup.after! > 0 ? startup.before! / startup.after! : null;
-    rows.push({ agent, model, startup, perTurn, cacheHit, extraSessionRatio, ready });
+    const requestShare =
+      ready && perTurn.before !== null && perTurn.before > 0 ? (startup.before! - startup.after!) / perTurn.before : null;
+    rows.push({ agent, model, startup, perTurn, cacheHit, requestShare, ready });
 
     const bs = sessions(beforeFirst);
     const as = sessions(afterFirst);
@@ -186,14 +191,15 @@ export function formatProof(report: ProofReport): string {
       cell(r.startup, fmtTokens),
       cell(r.perTurn, fmtTokens),
       cell(r.cacheHit, (v) => fmtPct(v)),
-      r.extraSessionRatio ? `${((r.extraSessionRatio - 1) * 100 >= 0 ? "+" : "") + Math.round((r.extraSessionRatio - 1) * 100)}%` : "-",
+      r.requestShare !== null ? `${r.requestShare >= 0 ? "-" : "+"}${(Math.abs(r.requestShare) * 100).toFixed(1)}%` : "-",
     ]);
-  lines.push(table(["agent", "model", "startup", "per turn", "cache hit", "more sessions/limit"], rows, ["l", "l", "l", "l", "l", "r"]));
+  lines.push(table(["agent", "model", "startup", "per turn", "cache hit", "saved per request"], rows, ["l", "l", "l", "l", "l", "r"]));
   lines.push("");
   lines.push(
     dim(
       "startup and per turn are median prompt tokens (lower is better); cache hit is the cached share of prompt tokens (higher is better). " +
-        "more sessions/limit estimates how many more sessions fit in a usage window from the startup change alone. Your own logs, before vs after.",
+        "saved per request is the startup change as a share of a typical warm request, since the startup context rides along on every request. " +
+          "Most of it is usually served from the prompt cache, which is cheaper than fresh input. Your own logs, before vs after.",
     ),
   );
   const small = report.rows.filter((r) => r.ready && r.startup.before !== null && r.startup.after !== null && Math.abs(r.startup.after - r.startup.before) / Math.max(1, r.startup.before) < 0.05);

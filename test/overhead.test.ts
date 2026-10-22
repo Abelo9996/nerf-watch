@@ -182,7 +182,8 @@ describe("proof", () => {
     const row = report.rows.find((r) => r.ready)!;
     expect(row.startup.before).toBe(40000);
     expect(row.startup.after).toBe(18000);
-    expect(row.extraSessionRatio).toBeGreaterThan(2);
+    expect(row.requestShare).not.toBeNull();
+    expect(row.requestShare!).toBeCloseTo(22000 / 40000, 5);
     expect(formatProof(report)).toContain("Before vs after the fix");
   });
 
