@@ -8,6 +8,7 @@ import {
   normalizeModel,
   type Cohort,
 } from "./metrics.js";
+import { addonsDrove, formatSplitClause, splitHasEnough, splitStartupByVersion, type StartupSample, type StartupSplit } from "./startup.js";
 import type { Dataset, Evidence, Finding, Severity, Turn } from "./types.js";
 
 const DAY = 86_400_000;
@@ -598,6 +599,42 @@ export function detectFallbacks(ds: Dataset): Finding[] {
       } satisfies Evidence,
     ],
   }));
+}
+
+/**
+ * Rewrite the startup-growth finding (Claude only) to split the growth into
+ * Claude Code's own base prompt and your add-ons, from attachment sizing of the
+ * sessions on each side of the change. When the split succeeds, the next step
+ * points at `nerf-watch fix` if your add-ons drove the growth, or at reporting
+ * to the vendor if Claude Code's base prompt did. When it cannot split (no
+ * attachment rows on a side, as in older logs, or the samples do not corroborate
+ * the growth), the finding is left with its generic wording.
+ */
+export function annotateStartupSplit(findings: Finding[], samples: StartupSample[]): Finding[] {
+  if (!samples.length) return findings;
+  return findings.map((f) => {
+    if (f.id !== "firstTurnPrompt-shift" || f.agent !== "claude") return f;
+    const b = f.evidence.find((e) => e.label === "before");
+    const a = f.evidence.find((e) => e.label === "after");
+    if (!b || !a) return f;
+    // Split by CLI version, not date: version cohorts overlap in wall-clock time,
+    // so a timestamp split would compare a window with itself.
+    const beforeV = (b.versions ?? []).filter((v) => v !== "unknown");
+    const afterV = (a.versions ?? []).filter((v) => v !== "unknown");
+    if (!beforeV.length || !afterV.length) return f;
+    const split: StartupSplit | null = splitStartupByVersion(samples, beforeV, afterV, f.model);
+    if (!split || !splitHasEnough(split)) return f;
+    // If attachment sizing does not corroborate the pooled growth, keep today's wording.
+    if (split.base.delta <= 0 && split.addons.delta <= 0) return f;
+    const explanation =
+      `The first request of a session now carries a median prompt of ${a.display}, up from ${b.display}. ` +
+      `Sizing the startup attachments on ${split.beforeSessions} earlier and ${split.afterSessions} recent session(s), that growth splits into ${formatSplitClause(split)}. ` +
+      `The startup prompt is fixed overhead paid by every new session, so it shrinks the room left for your own work.`;
+    const nextStep = addonsDrove(split)
+      ? "Most of the growth is in your own add-ons, not Claude Code. Run `nerf-watch fix` to see reversible changes (stash unused skills and subagents, move bulky memory on demand), then `nerf-watch proof` to confirm."
+      : `The growth is in Claude Code's own base prompt, not in anything you added, so ${REPORT_IT}.`;
+    return { ...f, startupSplit: split, explanation, nextStep };
+  });
 }
 
 const SEV_ORDER: Record<Severity, number> = { alert: 0, warn: 1, info: 2 };

@@ -94,6 +94,8 @@ function fmtRatio(r: number): string {
   return `${trim(r.toFixed(r < 10 ? 1 : 0))}x`;
 }
 
+const signedTokens = (n: number) => `${n >= 0 ? "+" : "-"}${fmtTokens(Math.abs(n))}`;
+
 const EFFORT_NAME = Object.fromEntries(Object.entries(EFFORT_RANK).map(([k, v]) => [v, k])) as Record<number, string>;
 const effortName = (v: number) => EFFORT_NAME[Math.round(v)] ?? "unknown";
 
@@ -162,6 +164,17 @@ function describe(f: ShareFinding): Described {
   }
   if (m.kind === "tokens") {
     const up = b !== null && b > 0 ? `up ${fmtRatio(a / b)}` : "up";
+    // The startup-growth split: never blame the CLI when most of the growth is add-ons.
+    if (f.detector === "firstTurnPrompt-shift" && f.startupSplit) {
+      const { baseDelta, addonDelta } = f.startupSplit;
+      return {
+        title: `${m.name} ${up}`,
+        phrase: `${m.name} ${up}: ${signedTokens(baseDelta)} from Claude Code, ${signedTokens(addonDelta)} from add-ons`,
+        before: b === null ? null : fmtTokens(b),
+        after: fmtTokens(a),
+        unit: m.unit,
+      };
+    }
     return { title: `${m.name} ${up}`, phrase: `${m.name} ${up}`, before: b === null ? null : fmtTokens(b), after: fmtTokens(a), unit: m.unit };
   }
   const fmt = m.kind === "rate" ? fmtPct : fmtTokens;

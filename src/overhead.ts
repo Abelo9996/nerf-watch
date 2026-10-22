@@ -158,7 +158,7 @@ export function formatStartupAttribution(a: StartupAttribution): string {
   const lines: string[] = [
     bold("Startup attribution, from your logs (no measurement)"),
     "",
-    `Real interactive startup: ${fmtTokens(a.calibratedTotal)} tokens, the median first-turn usage across ${a.sessions} recent ${a.model} session(s).`,
+    `Real interactive startup: ${fmtTokens(a.calibratedTotal)} tokens, the median first-turn usage across ${a.sessions} recent ${a.model} session(s). Scripted claude -p and SDK sessions are left out.`,
     "",
   ];
   const share = (t: number) => (a.calibratedTotal > 0 ? fmtPct(t / a.calibratedTotal) : "-");

@@ -78,6 +78,12 @@ export interface ShareFinding {
   cliAfter: string;
   before: ShareSide | null;
   after: ShareSide;
+  /**
+   * For the startup-growth finding: the before/after split of the growth into
+   * Claude Code's base prompt and your add-ons, in tokens. Aggregate counts
+   * only, so it carries nothing personal. Absent when the split was not made.
+   */
+  startupSplit?: { baseDelta: number; addonDelta: number };
 }
 
 export interface SharePayload {
@@ -255,6 +261,10 @@ function shareFinding(f: Finding, ids: string[]): ShareFinding | null {
   const cliAfterClean = cleanVersion(cliAfter, ids);
   if (!after || !cliAfterClean) return null;
   const isMismatch = f.id === "model-mismatch";
+  const startupSplit =
+    f.id === "firstTurnPrompt-shift" && f.startupSplit
+      ? { baseDelta: Math.round(f.startupSplit.base.delta), addonDelta: Math.round(f.startupSplit.addons.delta) }
+      : undefined;
   return {
     detector: f.id,
     signal,
@@ -267,6 +277,7 @@ function shareFinding(f: Finding, ids: string[]): ShareFinding | null {
     cliAfter: cliAfterClean,
     before,
     after,
+    ...(startupSplit ? { startupSplit } : {}),
   };
 }
 

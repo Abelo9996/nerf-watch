@@ -230,6 +230,14 @@ export interface Finding {
   nextStep?: string;
   /** What changed: a CLI version boundary or a time window with no version change. */
   trigger: "version" | "time" | "event";
+  /**
+   * For the startup-growth finding on Claude: the before/after split of the
+   * growth into Claude Code's base prompt and your add-ons, from attachment
+   * sizing. Set by `annotateStartupSplit` when there are attachment-carrying
+   * sessions on both sides; absent otherwise (old logs), and the generic
+   * wording is kept. Carries only aggregate token counts.
+   */
+  startupSplit?: import("./startup.js").StartupSplit;
 }
 
 /** Baseline stats for one (agent, cli_version, model) group. */

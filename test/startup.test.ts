@@ -107,6 +107,18 @@ describe("startup attachment parser", () => {
     const samples = await readStartupSamples({ roots: [root], home: "/home/u", limit: 10 });
     expect(samples.length).toBe(2);
   });
+
+  it("leaves scripted claude -p / SDK sessions out unless asked", async () => {
+    const root = tmp();
+    const tag = (rows: object[], entrypoint: string) => rows.map((r) => ({ ...r, entrypoint }));
+    writeLines(join(root, "person.jsonl"), tag(startupSession({ total: 50000 }), "cli"));
+    writeLines(join(root, "desktop.jsonl"), tag(startupSession({ total: 51000 }), "claude-desktop"));
+    writeLines(join(root, "script.jsonl"), tag(startupSession({ total: 20000 }), "sdk-cli"));
+    const interactive = await readStartupSamples({ roots: [root], home: "/home/u", limit: 10 });
+    expect(interactive.map((s) => s.entrypoint).sort()).toEqual(["claude-desktop", "cli"]);
+    const all = await readStartupSamples({ roots: [root], home: "/home/u", limit: 10, includeScripted: true });
+    expect(all.length).toBe(3);
+  });
 });
 
 describe("usage counting", () => {

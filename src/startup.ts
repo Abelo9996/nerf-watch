@@ -24,7 +24,8 @@ import { join } from "node:path";
 import { claudeAdapter } from "./adapters/claude.js";
 import { readJsonl } from "./adapters/util.js";
 import { estimateTokens } from "./tokens.js";
-import { median, normalizeModel } from "./metrics.js";
+import { compareVersions, median, normalizeModel } from "./metrics.js";
+import { fmtTokens } from "./format.js";
 
 export type StartupGroup = "skills" | "agents" | "instructions" | "hooks" | "mcp" | "tools" | "context" | "base";
 
@@ -41,8 +42,12 @@ export interface StartupItem {
 export interface StartupSample {
   sessionKey: string;
   timestamp: number;
+  /** CLI version that recorded the session, for splitting a version shift by version rather than by overlapping dates. */
+  cliVersion?: string;
   /** Normalized model that answered the first turn, for grouping like-with-like. */
   model: string;
+  /** How the session was started (cli, claude-desktop, sdk-cli, ...), when the log records it. */
+  entrypoint?: string;
   /** First-turn prompt tokens: input + cache_creation + cache_read. The calibration anchor. */
   calibratedTotal: number;
   /** Reducible attachment items only (base is derived per sample, not stored here). */
@@ -100,6 +105,17 @@ export interface ReadStartupOptions {
   since?: number;
   /** Most recent N sessions with attachments to read. Default 40. */
   limit?: number;
+  /**
+   * Also count non-interactive sessions (entrypoint "sdk-cli": `claude -p` and the Agent SDK). Off by default:
+   * scripted runs load a different startup (often without user hooks or settings), so mixing them in would make
+   * the interactive picture and its trend wrong.
+   */
+  includeScripted?: boolean;
+}
+
+/** True for sessions started by `claude -p` or the Agent SDK rather than a person in the CLI or desktop app. */
+export function isScriptedEntrypoint(entrypoint: string | undefined): boolean {
+  return typeof entrypoint === "string" && entrypoint.startsWith("sdk");
 }
 
 function claudeRoots(opts: ReadStartupOptions): string[] {
@@ -133,12 +149,16 @@ export async function parseStartupFile(file: string, home: string): Promise<Star
   let calibratedTotal: number | null = null;
   let firstTs = 0;
   let model = "unknown";
+  let cliVersion: string | undefined;
+  let entrypoint: string | undefined;
   const filter = (l: string) => l.includes('"attachment"') || l.includes('"assistant"');
 
   for await (const r of readJsonl(file, filter)) {
     if ("bad" in r) continue;
     const o = r.value;
     if (!o || typeof o !== "object") continue;
+    if (cliVersion === undefined && typeof o.version === "string" && o.version) cliVersion = o.version;
+    if (entrypoint === undefined && typeof o.entrypoint === "string" && o.entrypoint) entrypoint = o.entrypoint;
 
     if (o.type === "attachment" && o.attachment && typeof o.attachment === "object") {
       const a = o.attachment;
@@ -227,7 +247,7 @@ export async function parseStartupFile(file: string, home: string): Promise<Star
     if (prev) prev.tokens += it.tokens;
     else byKey.set(it.key, { ...it });
   }
-  return { sessionKey: file, timestamp: firstTs, model, calibratedTotal, items: [...byKey.values()] };
+  return { sessionKey: file, timestamp: firstTs, cliVersion, model, entrypoint, calibratedTotal, items: [...byKey.values()] };
 }
 
 function hookCommand(a: any): string | undefined {
@@ -260,7 +280,7 @@ export async function readStartupSamples(opts: ReadStartupOptions = {}): Promise
   for (const c of candidates) {
     if (out.length >= limit) break;
     const s = await parseStartupFile(c.f, home);
-    if (s) out.push(s);
+    if (s && (opts.includeScripted || !isScriptedEntrypoint(s.entrypoint))) out.push(s);
   }
   return out;
 }
@@ -375,4 +395,176 @@ function detailNote(samples: StartupSample[], group: "skills" | "agents"): strin
 /** Sum the reducible attachment tokens (everything the fix could remove), per sample. */
 export function reducibleTotal(sample: StartupSample): number {
   return sample.items.reduce((n, it) => n + (it.reducible ? it.tokens : 0), 0);
+}
+
+// ------------------------------------------- before/after split of the growth
+
+/** Before and after medians of one part of the startup, with the signed change. */
+export interface StartupSplitPart {
+  before: number;
+  after: number;
+  /** after - before. Positive means the part grew. */
+  delta: number;
+}
+
+export interface StartupSplitGroupPart extends StartupSplitPart {
+  group: Exclude<StartupGroup, "base">;
+}
+
+/**
+ * The startup growth between two time windows, split into Claude Code's own base
+ * prompt (a residual it cannot avoid) and your add-ons (skills, agents, memory,
+ * hooks, MCP, deferred tools, context), from attachment sizing. Medians are
+ * taken per side, so base + add-ons need not sum to the total to the token; the
+ * deltas are the honest per-part change.
+ */
+export interface StartupSplit {
+  /** Attachment-carrying sessions that fell in the before window. */
+  beforeSessions: number;
+  /** Attachment-carrying sessions that fell in the after window. */
+  afterSessions: number;
+  /** Median first-turn usage (whole startup) each side. */
+  total: StartupSplitPart;
+  /** The residual: system prompt and built-in tools, which no attachment carries. */
+  base: StartupSplitPart;
+  /** Everything a fix could remove, summed. */
+  addons: StartupSplitPart;
+  /** Per reducible group, biggest change first. Groups that never appear are omitted. */
+  groups: StartupSplitGroupPart[];
+}
+
+export interface TimeWindow {
+  /** Epoch ms, inclusive. */
+  start: number;
+  /** Epoch ms, inclusive. */
+  end: number;
+}
+
+const SPLIT_GROUPS: Exclude<StartupGroup, "base">[] = ["skills", "agents", "instructions", "hooks", "mcp", "tools", "context"];
+
+/** Minimum attachment-carrying sessions per side before a split is trustworthy. A median of one or two sessions is noise. */
+export const STARTUP_SPLIT_MIN_SESSIONS = 3;
+
+/** True when the split has enough attachment-carrying sessions on both sides to report. */
+export function splitHasEnough(split: StartupSplit): boolean {
+  return split.beforeSessions >= STARTUP_SPLIT_MIN_SESSIONS && split.afterSessions >= STARTUP_SPLIT_MIN_SESSIONS;
+}
+
+function sampleGroupTotals(s: StartupSample): Map<StartupGroup, number> {
+  const g = new Map<StartupGroup, number>();
+  for (const it of s.items) if (it.reducible) g.set(it.group, (g.get(it.group) ?? 0) + it.tokens);
+  return g;
+}
+
+function part(before: number[], after: number[]): StartupSplitPart {
+  const b = Math.round(median(before));
+  const a = Math.round(median(after));
+  return { before: b, after: a, delta: a - b };
+}
+
+/** Keep only sessions that answered on `model` (normalized). No filter when model is absent or unknown. */
+function byModel(samples: StartupSample[], model?: string): StartupSample[] {
+  if (!model || model === "unknown") return samples;
+  const want = normalizeModel(model);
+  return samples.filter((s) => s.model === want);
+}
+
+/**
+ * Attachment-carrying sessions whose CLI version falls in the inclusive semantic
+ * range [min(versions), max(versions)], on the given model. Using the range, not
+ * exact membership, catches sessions on an intermediate version the turn data
+ * never landed on, while still decomposing exactly the before/after window the
+ * finding compared (not a wider era, which would tell a different story).
+ * Splitting by version, not by date, is correct even when CLI versions ran
+ * concurrently in wall-clock time (so their date spans overlap and a timestamp
+ * split would compare a window with itself).
+ */
+export function samplesForVersionRange(samples: StartupSample[], versions: string[], model?: string): StartupSample[] {
+  if (!versions.length) return [];
+  const sorted = [...versions].sort(compareVersions);
+  const lo = sorted[0];
+  const hi = sorted[sorted.length - 1];
+  return byModel(samples, model).filter((s) => s.cliVersion !== undefined && compareVersions(s.cliVersion, lo) >= 0 && compareVersions(s.cliVersion, hi) <= 0);
+}
+
+/** The attachment-carrying sessions in a time window, on the given model. Used for the same-version overhead trend. */
+export function samplesInWindow(samples: StartupSample[], win: TimeWindow, model?: string): StartupSample[] {
+  return byModel(samples, model).filter((s) => s.timestamp >= win.start && s.timestamp <= win.end);
+}
+
+/**
+ * The before/after split from two already-selected sides. Returns null when
+ * either side has no attachment-carrying session, which is the "old logs
+ * without attachments" case the caller must fall back on. Medians are taken per
+ * side, so base + add-ons need not sum to the total to the token.
+ */
+export function splitStartupGrowth(beforeS: StartupSample[], afterS: StartupSample[]): StartupSplit | null {
+  if (!beforeS.length || !afterS.length) return null;
+
+  const totals = (ss: StartupSample[]) => ss.map((s) => s.calibratedTotal);
+  const addons = (ss: StartupSample[]) => ss.map(reducibleTotal);
+  const bases = (ss: StartupSample[]) => ss.map((s) => Math.max(0, s.calibratedTotal - reducibleTotal(s)));
+
+  const groups: StartupSplitGroupPart[] = [];
+  for (const g of SPLIT_GROUPS) {
+    const b = beforeS.map((s) => sampleGroupTotals(s).get(g) ?? 0);
+    const a = afterS.map((s) => sampleGroupTotals(s).get(g) ?? 0);
+    const p = part(b, a);
+    if (p.before === 0 && p.after === 0) continue; // this group never loaded on either side
+    groups.push({ group: g, ...p });
+  }
+  groups.sort((x, y) => Math.abs(y.delta) - Math.abs(x.delta));
+
+  return {
+    beforeSessions: beforeS.length,
+    afterSessions: afterS.length,
+    total: part(totals(beforeS), totals(afterS)),
+    base: part(bases(beforeS), bases(afterS)),
+    addons: part(addons(beforeS), addons(afterS)),
+    groups,
+  };
+}
+
+/**
+ * Split a version shift: the attachment sessions in the finding's before-version
+ * range vs those in its after-version range, on the finding's model. Returns
+ * null when either range has no attachment-carrying session (the "old logs"
+ * fallback), so the split decomposes the same comparison the finding reports.
+ */
+export function splitStartupByVersion(samples: StartupSample[], before: string[], after: string[], model?: string): StartupSplit | null {
+  return splitStartupGrowth(samplesForVersionRange(samples, before, model), samplesForVersionRange(samples, after, model));
+}
+
+/** Split a same-version time trend: an older window vs a recent one, on one model. */
+export function splitStartupByTime(samples: StartupSample[], before: TimeWindow, after: TimeWindow, model?: string): StartupSplit | null {
+  return splitStartupGrowth(samplesInWindow(samples, before, model), samplesInWindow(samples, after, model));
+}
+
+/** Human labels for a reducible group, for the split clause. */
+const SPLIT_GROUP_LABEL: Record<Exclude<StartupGroup, "base">, string> = {
+  skills: "skills",
+  agents: "agents",
+  instructions: "memory",
+  hooks: "hooks",
+  mcp: "MCP",
+  tools: "deferred tools",
+  context: "context",
+};
+
+const signed = (n: number) => `${n >= 0 ? "+" : "-"}${fmtTokens(Math.abs(n))}`;
+
+/**
+ * "Claude Code's own base prompt +31.9k, your add-ons +4.6k (skills +3.1k, memory +1.2k)".
+ * Groups with a change of at least `minGroup` tokens are named; the rest fold
+ * into the add-ons total. Used in the finding text and the overhead trend line.
+ */
+export function formatSplitClause(split: StartupSplit, minGroup = 200): string {
+  const named = split.groups.filter((g) => Math.abs(g.delta) >= minGroup);
+  const breakdown = named.length ? ` (${named.map((g) => `${SPLIT_GROUP_LABEL[g.group]} ${signed(g.delta)}`).join(", ")})` : "";
+  return `Claude Code's own base prompt ${signed(split.base.delta)}, your add-ons ${signed(split.addons.delta)}${breakdown}`;
+}
+
+/** True when more of the growth is in your own add-ons than in Claude Code's base prompt. */
+export function addonsDrove(split: StartupSplit): boolean {
+  return split.addons.delta > split.base.delta && split.addons.delta > 0;
 }

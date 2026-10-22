@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { extname, join, sep } from "node:path";
 import { cac } from "cac";
 import { adapters } from "./adapters/index.js";
-import { runDetectors } from "./detectors.js";
+import { annotateStartupSplit, runDetectors } from "./detectors.js";
 import { CARD_WIDTH, cardModel, proofCardModel, renderCardSvg, renderProofCardSvg } from "./card.js";
 import { bold, checkHeadline, countBySeverity, datasetSummary, dim, formatFinding, SEGMENT_ALIGN, SEGMENT_HEADERS, segmentRows, table, tooLittleHistory } from "./format.js";
 import { loadActivity, loadDataset } from "./load.js";
@@ -17,7 +17,7 @@ import { parseAgents, parsePositiveInt, parseRoots, parseSince, UsageError } fro
 import type { Dataset } from "./types.js";
 import { configEnv, scanConfig } from "./config-scan.js";
 import { buildAttribution, formatAttribution, formatConfigSources, formatLogOverhead, formatStartupAttribution, logOverhead } from "./overhead.js";
-import { aggregateStartup, readStartupSamples } from "./startup.js";
+import { aggregateStartup, formatSplitClause, readStartupSamples, splitHasEnough, splitStartupByTime, type StartupSample } from "./startup.js";
 import { countUsage } from "./usage.js";
 import { DEFAULT_MEASURE_MODEL, DEFAULT_REPEATS, measure, planClaudeAblation } from "./measure.js";
 import { applyItems as applyFixItems, backupsDir, buildFixItems, formatFixDryRun, listBackups, projectStartup, undo as undoFix } from "./fix.js";
@@ -35,6 +35,21 @@ async function load(o: Common) {
   // --root claude=DIR means "read these Claude Code logs", not "these plus every other agent's defaults".
   const agents = parseAgents(o.agent) ?? (roots ? Object.keys(roots) : undefined);
   return loadDataset({ since: parseSince(o.since), agents, roots, onProgress: logProgress() });
+}
+
+/**
+ * Startup attachment samples, used to split the startup-growth finding into
+ * Claude Code's base prompt and your add-ons. Claude only (the attachments are a
+ * Claude Code log feature); returns [] on any error so detection never fails
+ * because of them. The samples are read raw and stay local: only the aggregate
+ * token split (a few numbers) ever reaches a finding or the share payload.
+ */
+async function startupSamples(o: Common): Promise<StartupSample[]> {
+  const agents = parseAgents(o.agent);
+  if (agents && !agents.includes("claude")) return [];
+  const cfg = configEnv({ cwd: process.cwd() });
+  const roots = parseRoots(o.root)?.claude;
+  return readStartupSamples({ roots, home: cfg.home, since: parseSince(o.since), limit: 80 }).catch(() => []);
 }
 
 /** A stderr progress line for slow log reads. Only on a TTY, throttled, cleared when done. */
@@ -99,7 +114,8 @@ async function share(o: ShareOpts): Promise<void> {
   const ds = await load(o);
   if (!ds.turns.length) return noData(ds, o);
   const ids = localIdentifiers();
-  const payload: SharePayload = buildSharePayload(ds, runDetectors(ds), ids);
+  const findings = annotateStartupSplit(runDetectors(ds), await startupSamples(o));
+  const payload: SharePayload = buildSharePayload(ds, findings, ids);
   const problems = scanPayload(payload, ids);
   if (problems.length) {
     console.error("nerf-watch: refusing to share. The anonymized payload still contains something that could identify you:");
@@ -190,7 +206,7 @@ async function card(o: CardOpts): Promise<void> {
   const baselineDays = parsePositiveInt("--baseline-days", o.baselineDays);
   const ds = await load(o);
   if (!ds.turns.length) return noData(ds, o);
-  const findings = runDetectors(ds, { recentDays, baselineDays });
+  const findings = annotateStartupSplit(runDetectors(ds, { recentDays, baselineDays }), await startupSamples(o));
   const ids = localIdentifiers();
   const payload = buildSharePayload(ds, findings, ids);
   const problems = scanPayload(payload, ids);
@@ -299,12 +315,26 @@ async function overhead(o: OverheadOpts): Promise<void> {
   // Free, log-based attribution of the real interactive startup (Claude only).
   const wantClaude = !agents || agents.includes("claude");
   const roots = parseRoots(o.root)?.claude;
-  const samples = wantClaude ? await readStartupSamples({ roots, home: cfg.home }).catch(() => []) : [];
+  const samples = wantClaude ? await readStartupSamples({ roots, home: cfg.home, limit: 80 }).catch(() => []) : [];
   const startup = aggregateStartup(samples);
+
+  // Split the startup trend (older vs recent) into Claude Code's base prompt and
+  // your add-ons, using the same recent-window cutoff logOverhead uses.
+  const now = ds.turns.length ? Math.max(...ds.turns.map((t) => t.timestamp)) : Date.now();
+  const cut = now - recentDays * DAY_MS;
+  const claudeTrend = logs.find((l) => l.agent === "claude" && l.trend);
+  const trendSplit =
+    claudeTrend?.trend && samples.length
+      ? splitStartupByTime(samples, { start: 0, end: cut }, { start: cut, end: now + DAY_MS }, claudeTrend.model)
+      : null;
+  const trendSplitLine =
+    trendSplit && splitHasEnough(trendSplit) && (trendSplit.base.delta !== 0 || trendSplit.addons.delta !== 0)
+      ? dim(`Startup trend split (attachment-sized, ${trendSplit.beforeSessions} older / ${trendSplit.afterSessions} recent session(s)): ${formatSplitClause(trendSplit)}.`)
+      : null;
 
   if (!o.measure) {
     if (o.json) {
-      console.log(JSON.stringify({ logs, startup, sources }, null, 2));
+      console.log(JSON.stringify({ logs, startup, trendSplit, sources }, null, 2));
       return;
     }
     if (startup) {
@@ -312,6 +342,7 @@ async function overhead(o: OverheadOpts): Promise<void> {
       console.log("");
     }
     console.log(formatLogOverhead(logs));
+    if (trendSplitLine) console.log(trendSplitLine);
     console.log("");
     console.log(formatConfigSources(sources));
     console.log("");
@@ -374,7 +405,7 @@ async function overhead(o: OverheadOpts): Promise<void> {
     if (!o.json) process.stderr.write("\n");
     const attribution = buildAttribution(results, sources, o.measureModel);
     if (o.json) {
-      console.log(JSON.stringify({ logs, startup, sources, measured: results, attribution }, null, 2));
+      console.log(JSON.stringify({ logs, startup, trendSplit, sources, measured: results, attribution }, null, 2));
       return;
     }
     if (startup) {
@@ -382,6 +413,7 @@ async function overhead(o: OverheadOpts): Promise<void> {
       console.log("");
     }
     console.log(formatLogOverhead(logs));
+    if (trendSplitLine) console.log(trendSplitLine);
     console.log("");
     if (attribution) {
       console.log(dim("Measured cross-check below: these numbers come from ablation runs through `claude -p`, which loads the base but not the interactive attachments above."));
@@ -598,7 +630,7 @@ export function buildCli() {
       const baselineDays = parsePositiveInt("--baseline-days", o.baselineDays);
       const ds = await load(o);
       if (!ds.turns.length) return noData(ds, o);
-      const findings = runDetectors(ds, { recentDays, baselineDays });
+      const findings = annotateStartupSplit(runDetectors(ds, { recentDays, baselineDays }), await startupSamples(o));
       const counts = countBySeverity(findings);
       if (o.json) {
         console.log(JSON.stringify({ summary: counts, findings }, null, 2));
@@ -644,7 +676,7 @@ export function buildCli() {
       if (!o.json && ext !== ".md" && ext !== ".json") throw new UsageError(`--out must end in .md or .json, got "${o.out}"`);
       const ds = await load(o);
       if (!ds.turns.length) return noData(ds, o);
-      const r = buildReport(ds, runDetectors(ds));
+      const r = buildReport(ds, annotateStartupSplit(runDetectors(ds), await startupSamples(o)));
       if (o.json) {
         console.log(JSON.stringify(r, null, 2));
         return;
