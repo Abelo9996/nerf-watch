@@ -14,6 +14,8 @@ export interface LoadOptions {
   env?: NodeJS.ProcessEnv;
   home?: string;
   adapters?: Adapter[];
+  /** Called as files are parsed, for a progress indicator on slow first runs. */
+  onProgress?: (done: number, total: number) => void;
 }
 
 const CONCURRENCY = 8;
@@ -40,7 +42,11 @@ async function filesFor(adapter: Adapter, opts: LoadOptions, env: NodeJS.Process
 }
 
 /** Run `parse` over `files` with bounded concurrency. A file that throws yields undefined. */
-async function parseAll<T>(files: string[], parse: (f: string) => Promise<T>): Promise<(T | undefined)[]> {
+async function parseAll<T>(
+  files: string[],
+  parse: (f: string) => Promise<T>,
+  onDone?: () => void,
+): Promise<(T | undefined)[]> {
   const results: (T | undefined)[] = new Array(files.length);
   let next = 0;
   async function worker() {
@@ -51,6 +57,7 @@ async function parseAll<T>(files: string[], parse: (f: string) => Promise<T>): P
       } catch {
         results[i] = undefined;
       }
+      onDone?.();
     }
   }
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, files.length) }, worker));
@@ -66,14 +73,22 @@ export async function loadDataset(opts: LoadOptions = {}): Promise<Dataset> {
   const home = opts.home ?? homedir();
   const ds: Dataset = { turns: [], toolResults: [], events: [], files: {}, badLines: {}, roots: {}, filesFound: {} };
 
+  // Discover every adapter's files first, so progress has a real total before parsing starts.
+  const plan: { adapter: Adapter; files: string[] }[] = [];
   for (const adapter of adapterList(opts)) {
     const { roots, found, files } = await filesFor(adapter, opts, env, home);
     ds.roots![adapter.id] = roots;
     ds.filesFound![adapter.id] = found;
     ds.files[adapter.id] = files.length;
     ds.badLines[adapter.id] = 0;
+    plan.push({ adapter, files });
+  }
+  const total = plan.reduce((n, p) => n + p.files.length, 0);
+  let done = 0;
+  const tick = opts.onProgress ? () => opts.onProgress!(++done, total) : undefined;
 
-    const results = await parseAll(files, (f) => adapter.parseFile(f));
+  for (const { adapter, files } of plan) {
+    const results = await parseAll(files, (f) => adapter.parseFile(f), tick);
     for (const r of results) {
       if (!r) {
         ds.badLines[adapter.id]++;

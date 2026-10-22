@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { extname, sep } from "node:path";
+import { extname, join, sep } from "node:path";
 import { cac } from "cac";
 import { adapters } from "./adapters/index.js";
 import { runDetectors } from "./detectors.js";
-import { cardModel, renderCardSvg } from "./card.js";
+import { CARD_WIDTH, cardModel, proofCardModel, renderCardSvg, renderProofCardSvg } from "./card.js";
 import { bold, checkHeadline, countBySeverity, datasetSummary, dim, formatFinding, SEGMENT_ALIGN, SEGMENT_HEADERS, segmentRows, table, tooLittleHistory } from "./format.js";
 import { loadActivity, loadDataset } from "./load.js";
 import { analyzePhantoms, formatPhantomReport, PHANTOM_NOTE } from "./phantom.js";
@@ -15,6 +15,11 @@ import { buildSharePayload, localIdentifiers, openInBrowser, scanPayload, shareL
 import type { Severity } from "./types.js";
 import { parseAgents, parsePositiveInt, parseRoots, parseSince, UsageError } from "./options.js";
 import type { Dataset } from "./types.js";
+import { configEnv, scanConfig } from "./config-scan.js";
+import { buildAttribution, formatAttribution, formatConfigSources, formatLogOverhead, logOverhead } from "./overhead.js";
+import { DEFAULT_MEASURE_MODEL, DEFAULT_REPEATS, measure, planClaudeAblation } from "./measure.js";
+import { applyItems as applyFixItems, backupsDir, buildFixItems, formatFixDryRun, listBackups, undo as undoFix } from "./fix.js";
+import { buildProof, formatProof } from "./proof.js";
 
 interface Common {
   since?: string;
@@ -27,7 +32,21 @@ async function load(o: Common) {
   const roots = parseRoots(o.root);
   // --root claude=DIR means "read these Claude Code logs", not "these plus every other agent's defaults".
   const agents = parseAgents(o.agent) ?? (roots ? Object.keys(roots) : undefined);
-  return loadDataset({ since: parseSince(o.since), agents, roots });
+  return loadDataset({ since: parseSince(o.since), agents, roots, onProgress: logProgress() });
+}
+
+/** A stderr progress line for slow log reads. Only on a TTY, throttled, cleared when done. */
+function logProgress(): ((done: number, total: number) => void) | undefined {
+  if (!process.stderr.isTTY || process.env.NO_COLOR === "1") return undefined;
+  let last = 0;
+  return (done, total) => {
+    if (total < 200) return; // fast enough that a progress line only flickers
+    const now = Date.now();
+    if (done < total && now - last < 100) return;
+    last = now;
+    if (done >= total) process.stderr.write(`\r\u001b[K`);
+    else process.stderr.write(`\rReading ${done.toLocaleString("en-US")}/${total.toLocaleString("en-US")} session files...\u001b[K`);
+  };
 }
 
 /** Home directory shown as ~ so the message stays short. */
@@ -150,17 +169,6 @@ export function cardCommand(o: Pick<Common, "since" | "agent">): string {
   return parts.join(" ");
 }
 
-/** How to turn the SVG into a PNG for sites that do not accept SVG uploads. */
-export function pngHelp(svg: string): string[] {
-  const q = (p: string) => (/^[\w./\\:-]+$/.test(p) ? p : `"${p}"`);
-  const png = q(svg.replace(/\.svg$/i, "") + ".png");
-  svg = q(svg);
-  return [
-    "X and Bluesky need a PNG. To convert it:",
-    `  rsvg-convert -o ${png} ${svg}   (librsvg: brew install librsvg, or apt install librsvg2-bin)`,
-    `  or open ${svg} in a browser and take a screenshot of the card (1200x630)`,
-  ];
-}
 
 interface CardOpts extends Common {
   out: string;
@@ -175,16 +183,7 @@ interface CardOpts extends Common {
 async function card(o: CardOpts): Promise<void> {
   const out = String(o.out);
   const ext = extname(out).toLowerCase();
-  if (ext === ".png") {
-    throw new UsageError(
-      [
-        "PNG output is not built in: it would need a native image library or a headless browser, which would make `npx nerf-watch` slow to install.",
-        `Write the SVG with \`nerf-watch card --out ${out.slice(0, -4)}.svg\`, then convert it.`,
-        ...pngHelp(`${out.slice(0, -4)}.svg`),
-      ].join("\n"),
-    );
-  }
-  if (ext !== ".svg") throw new UsageError(`--out must end in .svg, got "${out}"`);
+  if (ext !== ".svg" && ext !== ".png") throw new UsageError(`--out must end in .svg or .png, got "${out}"`);
   const recentDays = parsePositiveInt("--recent-days", o.recentDays);
   const baselineDays = parsePositiveInt("--baseline-days", o.baselineDays);
   const ds = await load(o);
@@ -219,20 +218,29 @@ async function card(o: CardOpts): Promise<void> {
   }
   const sessions = new Set(ds.turns.map((t) => t.sessionKey)).size;
   const model = cardModel(payload, { since: o.since, totalFindings: notable, sessions });
-  writeFileSync(out, renderCardSvg(model));
+  const svg = renderCardSvg(model);
+  await writeCard(out, svg);
   if (o.json) {
     console.log(JSON.stringify({ out, kind: model.kind, headline: model.headline, findings: model.rows.length, more: model.more }, null, 2));
     return;
   }
-  console.log(`Wrote ${out} (1200x630 SVG): ${model.headline}`);
+  console.log(`Wrote ${out} (1200x630 ${extname(out).toLowerCase() === ".png" ? "PNG" : "SVG"}): ${model.headline}`);
   console.log(
     dim(
       "It shows only what `nerf-watch share` would share: agent names, CLI versions, model ids, dates and numbers. " +
         "No prompts, paths, project names, session ids, user or host names. Look at it before posting.",
     ),
   );
-  console.log("");
-  for (const line of pngHelp(out)) console.log(dim(line));
+}
+
+/** Write an SVG card as .svg, or rasterize it to .png in-process (no system tools). */
+async function writeCard(out: string, svg: string): Promise<void> {
+  if (extname(out).toLowerCase() === ".png") {
+    const { svgToPng } = await import("./png.js");
+    writeFileSync(out, await svgToPng(svg, CARD_WIDTH));
+  } else {
+    writeFileSync(out, svg);
+  }
 }
 
 interface PhantomOpts extends Common {
@@ -264,6 +272,235 @@ async function phantom(o: PhantomOpts): Promise<void> {
     return;
   }
   console.log(formatPhantomReport(r, act.turns.filter((t) => !t.sidechain).length));
+}
+
+interface OverheadOpts extends Common {
+  measure?: boolean;
+  yes?: boolean;
+  repeats: number;
+  measureModel: string;
+  recentDays: number;
+}
+
+/**
+ * `overhead`: log trend, config sources, and (with --measure) a ranked
+ * attribution from ablation runs. Measured runs cost money and ask first.
+ */
+async function overhead(o: OverheadOpts): Promise<void> {
+  const recentDays = parsePositiveInt("--recent-days", o.recentDays);
+  const agents = parseAgents(o.agent);
+  const ds = await load(o);
+  const logs = logOverhead(ds, { recentDays });
+  const cfg = configEnv({ cwd: process.cwd() });
+  const sources = scanConfig(cfg, agents);
+
+  if (!o.measure) {
+    if (o.json) {
+      console.log(JSON.stringify({ logs, sources }, null, 2));
+      return;
+    }
+    console.log(formatLogOverhead(logs));
+    console.log("");
+    console.log(formatConfigSources(sources));
+    console.log("");
+    console.log(dim("To attribute real tokens to each source: nerf-watch overhead --measure --yes"));
+    return;
+  }
+
+  // Measured attribution. Claude only.
+  if (agents && !agents.includes("claude")) {
+    const msg = "Measured attribution runs through the Claude Code CLI only. For Codex, use the config and log evidence above.";
+    if (o.json) console.log(JSON.stringify({ error: "unsupported", message: msg }));
+    else console.log(msg);
+    return;
+  }
+  const repeats = parsePositiveInt("--repeats", o.repeats);
+  const { profiles, cleanup } = planClaudeAblation(cfg);
+  const totalRuns = profiles.length * repeats;
+  const estCost = totalRuns * 0.003; // rough upper bound per cheap startup run
+  if (!o.yes) {
+    const plan = {
+      runs: totalRuns,
+      profiles: profiles.length,
+      repeats,
+      model: o.measureModel,
+      estimatedCostUsd: Number(estCost.toFixed(2)),
+    };
+    cleanup();
+    if (o.json) {
+      console.log(JSON.stringify({ needsConsent: true, plan }, null, 2));
+    } else {
+      console.log(
+        `Measured attribution would run the Claude CLI ${totalRuns} time(s) ` +
+          `(${profiles.length} profile(s) x ${repeats} repeat(s)) on ${o.measureModel}, costing about $${estCost.toFixed(2)}.`,
+      );
+      console.log("Re-run with --yes to allow it: nerf-watch overhead --measure --yes");
+    }
+    return;
+  }
+  try {
+    if (!o.json) console.error(dim(`Running ${totalRuns} startup measurement(s) on ${o.measureModel}...`));
+    let last = 0;
+    const results = await measure(cfg, profiles, {
+      model: o.measureModel,
+      repeats,
+      onProgress: (done, total) => {
+        if (!o.json && done !== last) {
+          last = done;
+          process.stderr.write(`\r  ${done}/${total} runs done   `);
+        }
+      },
+    });
+    if (!o.json) process.stderr.write("\n");
+    const attribution = buildAttribution(results, sources, o.measureModel);
+    if (o.json) {
+      console.log(JSON.stringify({ logs, sources, measured: results, attribution }, null, 2));
+      return;
+    }
+    console.log(formatLogOverhead(logs));
+    console.log("");
+    if (attribution) {
+      console.log(formatAttribution(attribution));
+    } else {
+      console.log("Measurement did not produce enough successful runs to attribute overhead. Check that `claude` is on PATH and you are logged in.");
+    }
+    console.log("");
+    console.log(formatConfigSources(sources));
+  } finally {
+    cleanup();
+  }
+}
+
+interface FixOpts extends Common {
+  apply?: boolean;
+  item?: string | string[];
+  yes?: boolean;
+}
+
+/**
+ * `fix`: list reversible changes that cut overhead. Dry run by default; --apply
+ * writes only the items named with --item (or, interactively, the ones ticked).
+ */
+async function fix(o: FixOpts): Promise<void> {
+  const agents = parseAgents(o.agent);
+  const cfg = configEnv({ cwd: process.cwd() });
+  const sources = scanConfig(cfg, agents);
+  const items = buildFixItems(cfg, sources);
+  const picked = o.item ? (Array.isArray(o.item) ? o.item : [o.item]).flatMap((x) => String(x).split(",")).map((s) => s.trim()).filter(Boolean) : [];
+
+  if (!o.apply) {
+    if (o.json) {
+      console.log(JSON.stringify({ items: items.map((i) => ({ id: i.id, agent: i.agent, title: i.title, kind: i.kind, estTokensSaved: i.estTokensSaved, changes: i.changes.map((c) => ({ path: c.path.replace(cfg.home, "~"), summary: c.summary })), caveat: i.caveat })) }, null, 2));
+      return;
+    }
+    console.log(formatFixDryRun(items, cfg.home));
+    return;
+  }
+
+  // Apply.
+  const editIds = items.filter((i) => i.kind === "edit").map((i) => i.id);
+  const toApply = picked.length ? picked : editIds; // --item names a subset; nothing preselected without it in interactive use
+  if (!picked.length && !o.yes && process.stdin.isTTY) {
+    // Interactive: nothing preselected. Ask the user to pass --item since we avoid a TUI dependency.
+    console.log(formatFixDryRun(items, cfg.home));
+    console.log("");
+    console.log("Nothing is selected by default. Apply specific items with:");
+    console.log(`  nerf-watch fix --apply --item <id>[,<id>...]   (ids: ${editIds.join(", ") || "none"})`);
+    return;
+  }
+  const unknown = toApply.filter((id) => !items.some((i) => i.id === id));
+  if (unknown.length) throw new UsageError(`Unknown fix item(s): ${unknown.join(", ")}. Run \`nerf-watch fix\` to list ids.`);
+  const result = applyItems(cfg, toApply);
+  if (o.json) {
+    console.log(JSON.stringify({ ...result, changed: result.changed.map((c) => ({ path: c.path.replace(cfg.home, "~"), summary: c.summary })) }, null, 2));
+    return;
+  }
+  if (!result.changed.length) {
+    console.log("Nothing to change (selected items were already applied or are advice only).");
+    return;
+  }
+  console.log(bold(`Applied ${result.changed.length} change(s). Every touched file was backed up first.`));
+  for (const c of result.changed) console.log(`  ${c.summary}`);
+  console.log("");
+  console.log(dim(`Backup id ${result.backupId}. Undo exactly with: nerf-watch undo`));
+}
+
+function applyItems(cfg: ReturnType<typeof configEnv>, ids: string[]) {
+  const sources = scanConfig(cfg);
+  const items = buildFixItems(cfg, sources);
+  return applyFixItems(cfg, items, ids);
+}
+
+interface UndoOpts {
+  json?: boolean;
+  backup?: string;
+}
+
+async function undoCmd(o: UndoOpts): Promise<void> {
+  const cfg = configEnv({ cwd: process.cwd() });
+  const available = listBackups(cfg);
+  if (!available.length) {
+    const msg = "No nerf-watch backups to undo. `nerf-watch fix --apply` creates one.";
+    if (o.json) console.log(JSON.stringify({ error: "no-backups", message: msg }));
+    else console.log(msg);
+    return;
+  }
+  const result = undoFix(cfg, o.backup);
+  if (o.json) {
+    console.log(JSON.stringify({ ...result, restored: result.restored.map((p) => p.replace(cfg.home, "~")), removed: result.removed.map((p) => p.replace(cfg.home, "~")) }, null, 2));
+    return;
+  }
+  console.log(bold(`Restored ${result.restored.length} file(s) from backup ${result.backupId}.`));
+  for (const p of result.restored) console.log(`  ${p.replace(cfg.home, "~")}`);
+  for (const p of result.removed) console.log(`  removed ${p.replace(cfg.home, "~")} (created by the fix)`);
+  if (result.mismatches.length) console.error(`nerf-watch: warning: ${result.mismatches.length} file(s) did not match their backup checksum.`);
+}
+
+interface ProofOpts extends Common {
+  sinceFix?: string;
+  card?: string;
+}
+
+/** `proof`: compare before/after the fix timestamp from real logs. */
+async function proof(o: ProofOpts): Promise<void> {
+  const cfg = configEnv({ cwd: process.cwd() });
+  let fixTs: number | undefined;
+  if (o.sinceFix) {
+    fixTs = parseSince(o.sinceFix);
+  } else {
+    const latest = listBackups(cfg)[0];
+    if (latest) {
+      try {
+        const set = JSON.parse(readFileSync(join(backupsDir(cfg), latest, "backup.json"), "utf8"));
+        fixTs = Date.parse(set.createdAt);
+      } catch {
+        fixTs = undefined;
+      }
+    }
+  }
+  if (fixTs === undefined || Number.isNaN(fixTs)) {
+    throw new UsageError("No fix timestamp. Run `nerf-watch fix --apply` first, or pass --since-fix <YYYY-MM-DD or span like 3d>.");
+  }
+  const ds = await load(o);
+  if (!ds.turns.length) return noData(ds, o);
+  const report = buildProof(ds, fixTs);
+  if (o.json) {
+    console.log(JSON.stringify(report, null, 2));
+    return;
+  }
+  console.log(formatProof(report));
+  if (o.card) {
+    const sessionsN = new Set(ds.turns.map((t) => t.sessionKey)).size;
+    const m = proofCardModel(report, { version: toolVersion(), responses: ds.turns.length, sessions: sessionsN });
+    if (!m) {
+      console.log("");
+      console.log("No before/after card yet: not enough sessions on both sides of the fix.");
+    } else {
+      await writeCard(o.card, renderProofCardSvg(m));
+      console.log("");
+      console.log(`Wrote ${o.card}: ${m.headline}`);
+    }
+  }
 }
 
 export function buildCli() {
@@ -360,6 +597,31 @@ export function buildCli() {
       writeFileSync(o.out, ext === ".json" ? JSON.stringify(r, null, 2) + "\n" : reportToMarkdown(r));
       console.log(`Wrote ${o.out} (${r.findings.length} finding(s)). Review it before sharing; it contains only aggregate numbers, versions, model ids and dates.`);
     });
+
+  common(cli.command("overhead", "Show what you pay before you type anything, and why"))
+    .option("--measure", "Attribute real tokens to each source with ablation runs through the agent CLI (spends a little)")
+    .option("--yes", "With --measure, allow the ablation runs to spend without prompting")
+    .option("--repeats <n>", "With --measure, runs per profile (median beats noise)", { default: DEFAULT_REPEATS })
+    .option("--measure-model <id>", "With --measure, the model to run", { default: DEFAULT_MEASURE_MODEL })
+    .option("--recent-days <n>", "Recent window for the startup trend", { default: 7 })
+    .action(overhead);
+
+  common(cli.command("fix", "Turn the overhead into reversible changes (dry run by default)"))
+    .option("--apply", "Apply the selected items (use --item to choose); backs up every touched file")
+    .option("--item <id>", "Apply this fix item id (repeatable); nothing is applied without it", {})
+    .option("--yes", "Allow apply without an interactive selection")
+    .action(fix);
+
+  cli
+    .command("undo", "Restore every file a previous `fix --apply` changed, byte for byte")
+    .option("--backup <id>", "Restore a specific backup id (default: the newest)")
+    .option("--json", "Machine-readable JSON output")
+    .action(undoCmd);
+
+  common(cli.command("proof", "Compare your sessions before and after the fix from real logs"))
+    .option("--since-fix <when>", "Fix timestamp (YYYY-MM-DD or span like 3d); default: the newest fix backup")
+    .option("--card <file>", "Also write a before/after card (.svg or .png)")
+    .action(proof);
 
   cli.help();
   cli.version(toolVersion());

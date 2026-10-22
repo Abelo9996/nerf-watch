@@ -48,6 +48,8 @@ export {
   buildCard,
   cardModel,
   renderCardSvg,
+  proofCardModel,
+  renderProofCardSvg,
   timePhrase,
   CARD_WIDTH,
   CARD_HEIGHT,
@@ -56,4 +58,64 @@ export {
   type CardModel,
   type CardRow,
   type CardOptions,
+  type ProofCardModel,
+  type ProofCardRow,
 } from "./card.js";
+export { estimateTokens, fmtTokensApprox } from "./tokens.js";
+export {
+  configEnv,
+  scanConfig,
+  scanClaude,
+  scanCodex,
+  type ConfigEnv,
+  type ConfigSource,
+  type SourceKind,
+} from "./config-scan.js";
+export {
+  logOverhead,
+  fixedShare,
+  buildAttribution,
+  formatLogOverhead,
+  formatConfigSources,
+  formatAttribution,
+  type LogOverhead,
+  type Attribution,
+  type AttributionRow,
+} from "./overhead.js";
+export {
+  planClaudeAblation,
+  measure,
+  runOnce,
+  DEFAULT_MEASURE_MODEL,
+  DEFAULT_REPEATS,
+  MEASURE_PROMPT,
+  type Profile,
+  type ProfileResult,
+  type RunResult,
+} from "./measure.js";
+export {
+  buildFixItems,
+  applyItems,
+  undo,
+  listBackups,
+  backupsDir,
+  formatFixDryRun,
+  disableMcpServer,
+  setJsonKey,
+  replaceSection,
+  type FixItem,
+  type FixChange,
+  type ApplyResult,
+  type UndoResult,
+  type BackupSet,
+} from "./fix.js";
+export {
+  buildProof,
+  formatProof,
+  sessionsStillNeeded,
+  PROOF_MIN,
+  type ProofReport,
+  type ProofRow,
+  type ProofMetric,
+} from "./proof.js";
+export { svgToPng } from "./png.js";
