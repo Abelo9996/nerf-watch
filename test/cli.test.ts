@@ -12,7 +12,7 @@ let dir: string;
 function run(args: string[], env: NodeJS.ProcessEnv = {}) {
   const r = spawnSync(process.execPath, [CLI, ...args], {
     encoding: "utf8",
-    env: { ...process.env, NO_COLOR: "1", ...env },
+    env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0", ...env },
     cwd: dir,
   });
   return { code: r.status, out: r.stdout, err: r.stderr };

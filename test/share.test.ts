@@ -201,7 +201,7 @@ describe("share command end to end", () => {
     const r = spawnSync(process.execPath, [CLI, ...args], {
       encoding: "utf8",
       cwd: dir,
-      env: { ...process.env, NO_COLOR: "1", USER: PLANTED_USER, LOGNAME: PLANTED_USER, USERNAME: PLANTED_USER },
+      env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0", USER: PLANTED_USER, LOGNAME: PLANTED_USER, USERNAME: PLANTED_USER },
     });
     return { code: r.status, out: r.stdout, err: r.stderr };
   };

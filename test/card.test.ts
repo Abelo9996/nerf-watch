@@ -194,7 +194,7 @@ describe("card command end to end", () => {
     const r = spawnSync(process.execPath, [CLI, ...args], {
       encoding: "utf8",
       cwd: dir,
-      env: { ...process.env, NO_COLOR: "1", USER: PLANTED_USER, LOGNAME: PLANTED_USER, USERNAME: PLANTED_USER },
+      env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0", USER: PLANTED_USER, LOGNAME: PLANTED_USER, USERNAME: PLANTED_USER },
     });
     return { code: r.status, out: r.stdout, err: r.stderr };
   };
@@ -221,7 +221,6 @@ describe("card command end to end", () => {
     expect(r.err).toBe("");
     expect(r.code).toBe(0);
     expect(r.out).toContain("Wrote nerf-watch-card.svg (1200x630 SVG): Cache writes per turn up 3.3x after Claude Code 2.1.272");
-    expect(r.out).toContain("rsvg-convert -o nerf-watch-card.png nerf-watch-card.svg");
     const svg = readFileSync(join(dir, "nerf-watch-card.svg"), "utf8");
     expect(xmlProblems(svg)).toEqual([]);
     for (const bad of [PLANTED_USER, PLANTED_PATH, "/Users/", "secret-client-repo", SENTINEL_PROMPT, SENTINEL_CWD, "sentinel", "demo-project", dir]) {
@@ -253,13 +252,14 @@ describe("card command end to end", () => {
     expect(existsSync(join(dir, "short.svg"))).toBe(false);
   });
 
-  it("explains PNG and rejects other extensions", () => {
+  it("renders PNG in-process and rejects other extensions", () => {
     const png = run(["card", "--out", "card.png", ...roots]);
-    expect(png.code).toBe(2);
-    expect(png.err).toContain("PNG output is not built in");
-    expect(png.err).toContain("rsvg-convert -o card.png card.svg");
-    expect(existsSync(join(dir, "card.png"))).toBe(false);
-    expect(run(["card", "--out", "card.txt", ...roots]).err).toContain('--out must end in .svg, got "card.txt"');
+    expect(png.code).toBe(0);
+    expect(png.out).toContain("Wrote card.png (1200x630 PNG)");
+    const bytes = readFileSync(join(dir, "card.png"));
+    // PNG magic number: the file was rasterized, not just copied SVG text.
+    expect(bytes.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+    expect(run(["card", "--out", "card.txt", ...roots]).err).toContain('--out must end in .svg or .png, got "card.txt"');
   });
 
   it("check suggests a card when there is something to share, including all clear", () => {
