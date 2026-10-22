@@ -12,11 +12,13 @@
  * written without --apply and an explicit selection.
  */
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { type ConfigEnv, type ConfigSource, claudeDir, claudeJsonPath } from "./config-scan.js";
 import { estimateTokens, fmtTokensApprox } from "./tokens.js";
 import type { Attribution } from "./overhead.js";
+import type { UsageCounts } from "./usage.js";
+import type { StartupAttribution } from "./startup.js";
 
 /** A single file change within a fix item. `transform` is applied to the current file text. */
 export interface FixChange {
@@ -28,17 +30,30 @@ export interface FixChange {
   creates?: boolean;
 }
 
+/** Move a file or directory into the stash (and back, on undo). Byte-identical. */
+export interface FixMove {
+  from: string;
+  to: string;
+  summary: string;
+}
+
 export interface FixItem {
   id: string;
   agent: string;
   title: string;
   description: string;
-  /** "edit" items change files; "advice" items only explain (hooks, tool search). */
+  /** "edit" items change files or move them; "advice" items only explain (hooks, tool search). */
   kind: "edit" | "advice";
   /** Estimated tokens saved per request, when known. */
   estTokensSaved?: number;
   changes: FixChange[];
+  /** Directory / file moves into the stash. Reversed exactly by `undo`. */
+  moves?: FixMove[];
   caveat?: string;
+  /** Part of a prefix group; hidden from the top of the dry-run listing but still selectable by id. */
+  member?: boolean;
+  /** The group item id this member belongs to, for the "or pick individually" hint. */
+  group?: string;
 }
 
 const MEMORY_SECTION_MIN_TOKENS = 400;
@@ -79,10 +94,25 @@ function bulkiestSection(md: string): { heading: string; slug: string; body: str
  * config estimate. Pure: no files are read or written beyond the config scan
  * the caller already did, except reading memory files to size their sections.
  */
-export function buildFixItems(cfg: ConfigEnv, sources: ConfigSource[], attribution?: Attribution | null): FixItem[] {
+export interface FixOptions {
+  attribution?: Attribution | null;
+  /** Skill and subagent usage over the window, for the usage-aware stash items. */
+  usage?: UsageCounts | null;
+  /** Propose items used this many times or fewer in the window. Default 0 (never used). */
+  threshold?: number;
+  /** Log-based startup attribution, for the measured hook sizes in the hook advice. */
+  startup?: StartupAttribution | null;
+}
+
+export function buildFixItems(cfg: ConfigEnv, sources: ConfigSource[], optsOrAttribution?: FixOptions | Attribution | null): FixItem[] {
+  const opts: FixOptions = optsOrAttribution && "rows" in optsOrAttribution ? { attribution: optsOrAttribution } : (optsOrAttribution ?? {});
+  const attribution = opts.attribution;
   const items: FixItem[] = [];
   const measured = new Map<string, number>();
   for (const r of attribution?.rows ?? []) measured.set(r.source, r.tokens);
+
+  // 0. Usage-aware stash items: skills and subagents that were never (or rarely) used in the window.
+  if (opts.usage) items.push(...unusedStashItems(cfg, opts.usage, opts.threshold ?? 0));
 
   // 1. MCP servers (global, Claude): disable by stashing under a nerf-watch key.
   for (const s of sources.filter((x) => x.agent === "claude" && x.kind === "mcp" && x.scope === "user")) {
@@ -146,14 +176,20 @@ export function buildFixItems(cfg: ConfigEnv, sources: ConfigSource[], attributi
     });
   }
 
-  // 4. Context-injecting hooks: advice only, never edited.
+  // 4. Context-injecting hooks: advice only, never edited. Sized from the logs when available.
+  const hookDetails = opts.startup?.details.filter((d) => d.group === "hooks") ?? [];
   for (const s of sources.filter((x) => x.agent === "claude" && x.kind === "hook")) {
+    const event = s.id.split(":").pop() ?? "";
+    const measured = hookDetails.filter((d) => d.key.startsWith(`hook:${event}`));
+    const sized = measured.length
+      ? `From your logs, ${measured.map((d) => `${d.label} injects about ${fmtTokensApprox(d.tokens)}`).join("; ")}. `
+      : "";
     items.push({
-      id: `hook-${s.id.split(":").pop()}`,
+      id: `hook-${event}`,
       agent: "claude",
       title: `Review ${s.label}`,
       description:
-        `${s.detail}. nerf-watch does not edit hook scripts. If the injected text is large, trim what the hook prints at session start, ` +
+        `${s.detail}. ${sized}nerf-watch does not edit hook scripts. If the injected text is large, trim what the hook prints at session start, ` +
         `or move rarely needed context into a file the agent opens on demand.`,
       kind: "advice",
       changes: [],
@@ -182,26 +218,218 @@ export function buildFixItems(cfg: ConfigEnv, sources: ConfigSource[], attributi
   });
 }
 
+// --------------------------------------------- usage-aware skill / agent stash
+
+/** Where unused skills and agents are moved. Under ~/.claude so undo can find them. */
+export function stashDir(cfg: ConfigEnv): string {
+  return join(claudeDir(cfg), ".nerf-watch-stash");
+}
+
+interface Listable {
+  name: string;
+  /** Directory (skills) or file (agents) to move. */
+  path: string;
+  /** Estimated tokens its listing line costs on every startup. */
+  listingTokens: number;
+}
+
+/** The `name:`/`description:` from a markdown frontmatter block, for the listing-line estimate. */
+function frontmatter(md: string): { name?: string; description?: string } {
+  const fm = /^---\n([\s\S]*?)\n---/.exec(md);
+  const block = fm ? fm[1] : md.slice(0, 600);
+  const name = /name:\s*(.+)/.exec(block)?.[1]?.trim();
+  const desc = /description:\s*([\s\S]*?)(?:\n[a-z_]+:|$)/i.exec(block)?.[1]?.trim();
+  return { name, description: desc };
+}
+
+function listingTokensFor(name: string, description: string | undefined): number {
+  return estimateTokens(`- ${name}: ${description ?? ""}`);
+}
+
+/** User skills: one directory each under ~/.claude/skills with a SKILL.md. */
+export function listUserSkills(cfg: ConfigEnv): Listable[] {
+  const root = join(claudeDir(cfg), "skills");
+  const out: Listable[] = [];
+  let names: string[] = [];
+  try {
+    names = readdirSync(root, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
+  } catch {
+    return out;
+  }
+  for (const name of names) {
+    const md = readText(join(root, name, "SKILL.md"));
+    if (md === null) continue; // not a skill directory
+    const fm = frontmatter(md);
+    out.push({ name, path: join(root, name), listingTokens: listingTokensFor(fm.name || name, fm.description) });
+  }
+  return out;
+}
+
+/** User subagents: one `<name>.md` each under ~/.claude/agents. */
+export function listUserAgents(cfg: ConfigEnv): Listable[] {
+  const root = join(claudeDir(cfg), "agents");
+  const out: Listable[] = [];
+  let entries: string[] = [];
+  try {
+    entries = readdirSync(root, { withFileTypes: true }).filter((e) => e.isFile() && e.name.endsWith(".md")).map((e) => e.name);
+  } catch {
+    return out;
+  }
+  for (const file of entries) {
+    const md = readText(join(root, file));
+    if (md === null) continue;
+    const name = file.replace(/\.md$/, "");
+    const fm = frontmatter(md);
+    out.push({ name, path: join(root, file), listingTokens: listingTokensFor(fm.name || name, fm.description) });
+  }
+  return out;
+}
+
+/** Prefix before the first "-" ("gsd-planner" -> "gsd"), for grouping families of skills/agents. */
+function prefixOf(name: string): string {
+  const i = name.indexOf("-");
+  return i > 0 ? name.slice(0, i) : name;
+}
+
+/**
+ * Build move-based stash items for user skills and subagents used `threshold`
+ * times or fewer in the window. Families that share a prefix (for example all
+ * `gsd-*`) are offered as one group item, with each member also selectable on
+ * its own. Anything used more than the threshold is never proposed.
+ */
+function unusedStashItems(cfg: ConfigEnv, usage: UsageCounts, threshold: number): FixItem[] {
+  const items: FixItem[] = [];
+  const stash = stashDir(cfg);
+
+  const build = (kind: "skill" | "agent", all: Listable[], uses: Map<string, number>): void => {
+    const subdir = kind === "skill" ? "skills" : "agents";
+    const unused = all.filter((x) => (uses.get(x.name) ?? 0) <= threshold);
+    if (!unused.length) return;
+    const dest = (x: Listable) => join(stash, subdir, kind === "skill" ? x.name : `${x.name}.md`);
+    const noun = kind === "skill" ? "skill" : "subagent";
+    const windowDesc = threshold > 0 ? `used ${threshold} time(s) or fewer` : "never used";
+
+    // Individual member items (hidden from the top listing, selectable by id).
+    const byName = new Map<string, FixItem>();
+    for (const x of unused) {
+      const id = `stash-${kind}:${x.name}`;
+      const group = `stash-${kind}s:${prefixOf(x.name)}`;
+      const it: FixItem = {
+        id,
+        agent: "claude",
+        title: `Stash the ${windowDesc} ${noun} "${x.name}"`,
+        description: `Its listing line sits in the system prompt on every startup. It is moved to ${dest(x).replace(cfg.home, "~")} (not deleted); undo moves it back.`,
+        kind: "edit",
+        estTokensSaved: x.listingTokens,
+        changes: [],
+        moves: [{ from: x.path, to: dest(x), summary: `Move ${noun} "${x.name}" into the nerf-watch stash` }],
+        member: true,
+        group,
+      };
+      byName.set(x.name, it);
+      items.push(it);
+    }
+
+    // Prefix groups: one item per prefix with two or more unused members.
+    const groups = new Map<string, Listable[]>();
+    for (const x of unused) {
+      const p = prefixOf(x.name);
+      (groups.get(p) ?? groups.set(p, []).get(p)!).push(x);
+    }
+    for (const [prefix, members] of groups) {
+      if (members.length < 2) {
+        // A singleton has no group; promote its member item to the top listing.
+        const only = byName.get(members[0].name);
+        if (only) {
+          only.member = false;
+          only.group = undefined;
+        }
+        continue;
+      }
+      const saved = members.reduce((n, m) => n + m.listingTokens, 0);
+      items.push({
+        id: `stash-${kind}s:${prefix}`,
+        agent: "claude",
+        title: `Stash all ${members.length} ${windowDesc} ${prefix}-* ${noun}s`,
+        description:
+          `These ${members.length} ${noun}s all begin with "${prefix}-" and were ${windowDesc} in the window. ` +
+          `Each is moved into ${join(stash, subdir).replace(cfg.home, "~")} (not deleted); undo moves them all back.`,
+        kind: "edit",
+        estTokensSaved: saved,
+        changes: [],
+        moves: members.map((m) => ({ from: m.path, to: dest(m), summary: `Move ${noun} "${m.name}" into the nerf-watch stash` })),
+        caveat: `Picks the whole ${prefix}-* family. To keep one, apply individual ids instead (stash-${kind}:<name>).`,
+      });
+    }
+  };
+
+  build("skill", listUserSkills(cfg), usage.skills);
+  build("agent", listUserAgents(cfg), usage.agents);
+  return items;
+}
+
+/** Projected startup after applying the selected items: total minus their estimated savings. */
+export function projectStartup(items: FixItem[], selectedIds: string[], calibratedTotal: number): { before: number; after: number; saved: number } {
+  // A group and its members overlap; count each underlying move only once by its `to` path.
+  const selected = items.filter((i) => selectedIds.includes(i.id));
+  const movedPaths = new Set<string>();
+  let saved = 0;
+  // Edit items with text changes (memory trim, mcp disable) contribute their own saving.
+  for (const i of selected) {
+    if (i.moves?.length) continue;
+    saved += i.estTokensSaved ?? 0;
+  }
+  // Move items: sum per unique move, prorating the item saving across its moves.
+  for (const i of selected) {
+    if (!i.moves?.length) continue;
+    const per = (i.estTokensSaved ?? 0) / i.moves.length;
+    for (const m of i.moves) {
+      if (movedPaths.has(m.to)) continue;
+      movedPaths.add(m.to);
+      saved += per;
+    }
+  }
+  saved = Math.round(saved);
+  return { before: calibratedTotal, after: Math.max(0, calibratedTotal - saved), saved };
+}
+
 // --------------------------------------------------------------- formatting
 
 import { bold, dim } from "./format.js";
 
-/** The dry-run listing: each item, what it changes, and the exact edits. */
-export function formatFixDryRun(items: FixItem[], home: string): string {
+/** The dry-run listing: each item, what it changes, and the exact edits. Group members are folded into their group. */
+export function formatFixDryRun(items: FixItem[], home: string, projected?: { before: number; after: number; saved: number }): string {
   if (!items.length) return "No overhead sources that nerf-watch can fix were found.";
   const tilde = (p: string) => p.replace(home, "~");
-  const edits = items.filter((i) => i.kind === "edit");
+  const edits = items.filter((i) => i.kind === "edit" && !i.member);
+  const members = items.filter((i) => i.kind === "edit" && i.member);
   const advice = items.filter((i) => i.kind === "advice");
   const lines: string[] = [bold("Reversible fixes (dry run; nothing is written)")];
   for (const i of edits) {
     const saved = i.estTokensSaved ? ` (~${fmtTokensApprox(i.estTokensSaved)}/request)` : "";
     lines.push("", `  [${i.id}]${saved}  ${i.title}`, `    ${i.description}`);
     for (const c of i.changes) lines.push(`    edit: ${c.summary}`, `          in ${tilde(c.path)}`);
+    const moves = i.moves ?? [];
+    if (moves.length > 3) {
+      const dest = tilde(join(moves[0].to, ".."));
+      lines.push(`    move: ${moves.length} item(s) into ${dest}`, `          e.g. ${tilde(moves[0].from)}, ${tilde(moves[1].from)}, ...`);
+    } else {
+      for (const m of moves) lines.push(`    move: ${m.summary}`, `          ${tilde(m.from)} -> ${tilde(m.to)}`);
+    }
     if (i.caveat) lines.push(dim(`    note: ${i.caveat}`));
+  }
+  if (members.length) {
+    lines.push("", dim(`Or pick individual items (${members.length}): ${members.slice(0, 6).map((m) => m.id).join(", ")}${members.length > 6 ? ", ..." : ""}`));
   }
   if (advice.length) {
     lines.push("", bold("Advice (nerf-watch will not change these for you)"));
     for (const i of advice) lines.push("", `  [${i.id}]  ${i.title}`, `    ${i.description}`);
+  }
+  if (projected && projected.saved > 0) {
+    lines.push(
+      "",
+      bold(`If you apply the edit items above: startup ~${fmtTokensApprox(projected.before)} -> ~${fmtTokensApprox(projected.after)} per session (-${Math.round((projected.saved / Math.max(1, projected.before)) * 100)}%).`),
+    );
   }
   lines.push("", dim("Apply selected items: nerf-watch fix --apply --item <id>[,<id>]   Undo: nerf-watch undo"));
   return lines.join("\n");
@@ -264,11 +492,19 @@ export interface BackupEntry {
   sha256: string | null;
 }
 
+/** A directory or file moved into the stash. Reversed by moving `to` back to `from`. */
+export interface MoveEntry {
+  from: string;
+  to: string;
+}
+
 export interface BackupSet {
   schema: "nerf-watch-backup/1";
   createdAt: string;
   items: string[];
   entries: BackupEntry[];
+  /** Moves performed by this apply, to reverse on undo. Absent in older backups. */
+  moves?: MoveEntry[];
 }
 
 export function backupsDir(cfg: ConfigEnv): string {
@@ -286,9 +522,20 @@ export interface ApplyResult {
   skipped: { id: string; reason: string }[];
 }
 
+/** Move a file or directory, preserving bytes. Rename where possible, copy+remove across devices. */
+function moveExact(from: string, to: string): void {
+  mkdirSync(join(to, ".."), { recursive: true });
+  try {
+    renameSync(from, to);
+  } catch {
+    cpSync(from, to, { recursive: true });
+    rmSync(from, { recursive: true, force: true });
+  }
+}
+
 /**
- * Apply the selected items. Backs up every touched file first, then writes.
- * Returns the backup id to pass to `undo`.
+ * Apply the selected items. Backs up every touched file first, then writes, then
+ * moves stashed items. Returns the backup id to pass to `undo`.
  */
 export function applyItems(cfg: ConfigEnv, items: FixItem[], selectedIds: string[]): ApplyResult {
   const selected = items.filter((i) => selectedIds.includes(i.id));
@@ -301,6 +548,8 @@ export function applyItems(cfg: ConfigEnv, items: FixItem[], selectedIds: string
   const createdPaths = new Set<string>();
   const applied: { path: string; summary: string }[] = [];
   const touchedItems: string[] = [];
+  // Collect moves across selected items, deduped by source (a group and its member can both be picked).
+  const moves = new Map<string, { move: FixMove }>();
   for (const item of editItems) {
     let itemChanged = false;
     for (const ch of item.changes) {
@@ -310,6 +559,12 @@ export function applyItems(cfg: ConfigEnv, items: FixItem[], selectedIds: string
       if (next === null || next === current.get(ch.path)) continue;
       current.set(ch.path, next);
       applied.push({ path: ch.path, summary: ch.summary });
+      itemChanged = true;
+    }
+    for (const m of item.moves ?? []) {
+      // Skip moves that are already done (source gone) or would clobber an existing destination.
+      if (!existsSync(m.from) || existsSync(m.to) || moves.has(m.from)) continue;
+      moves.set(m.from, { move: m });
       itemChanged = true;
     }
     if (itemChanged) touchedItems.push(item.id);
@@ -325,10 +580,11 @@ export function applyItems(cfg: ConfigEnv, items: FixItem[], selectedIds: string
     const orig = existed ? readFileSync(p) : null;
     entries.push({ path: p, originalBase64: orig ? orig.toString("base64") : null, sha256: orig ? sha(orig) : null });
   }
+  const moveEntries: MoveEntry[] = [...moves.values()].map(({ move }) => ({ from: move.from, to: move.to }));
 
-  if (touchedPaths.length) {
+  if (touchedPaths.length || moveEntries.length) {
     mkdirSync(dir, { recursive: true });
-    const set: BackupSet = { schema: "nerf-watch-backup/1", createdAt: new Date().toISOString(), items: touchedItems, entries };
+    const set: BackupSet = { schema: "nerf-watch-backup/1", createdAt: new Date().toISOString(), items: touchedItems, entries, moves: moveEntries };
     writeFileSync(join(dir, "backup.json"), JSON.stringify(set, null, 2));
     // Write the new file contents.
     for (const p of touchedPaths) {
@@ -336,6 +592,11 @@ export function applyItems(cfg: ConfigEnv, items: FixItem[], selectedIds: string
       if (text === null || text === undefined) continue;
       mkdirSync(join(p, ".."), { recursive: true });
       writeFileSync(p, text);
+    }
+    // Perform the moves last, after the manifest records how to reverse them.
+    for (const { move } of moves.values()) {
+      moveExact(move.from, move.to);
+      applied.push({ path: move.from, summary: move.summary });
     }
   }
 
@@ -374,6 +635,12 @@ export function undo(cfg: ConfigEnv, backupId?: string): UndoResult {
   const restored: string[] = [];
   const removed: string[] = [];
   const mismatches: string[] = [];
+  // Reverse moves first, so a moved-back directory never collides with a restored file.
+  for (const m of set.moves ?? []) {
+    if (!existsSync(m.to)) continue; // already moved back, or gone
+    moveExact(m.to, m.from);
+    restored.push(m.from);
+  }
   for (const e of set.entries) {
     if (e.originalBase64 === null) {
       // The file was created by the fix; remove it to return to the original state.

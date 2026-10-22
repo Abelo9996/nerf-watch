@@ -12,6 +12,7 @@ import type { Dataset, Turn } from "./types.js";
 import { cacheHitRate, mainTurns, median, modelOf, promptTokens, warmTurns } from "./metrics.js";
 import { type ConfigSource } from "./config-scan.js";
 import type { ProfileResult } from "./measure.js";
+import type { StartupAttribution, StartupGroup } from "./startup.js";
 import { fmtTokensApprox } from "./tokens.js";
 import { bold, dim, fmtPct, fmtTokens, table } from "./format.js";
 
@@ -139,6 +140,55 @@ export function formatLogOverhead(logs: LogOverhead[]): string {
     "\n\n" +
     dim("startup = median prompt tokens on the first turn of a session (the fixed context before you type). per turn = median prompt on a warm turn. fixed/req estimates the share of a typical request that is fixed startup overhead. trend compares the recent window to older sessions.")
   );
+}
+
+const GROUP_LABEL: Record<StartupGroup, string> = {
+  base: "Base system prompt and built-in tools",
+  skills: "Skill listing",
+  agents: "Agent listing",
+  instructions: "Instructions (CLAUDE.md)",
+  hooks: "SessionStart hooks",
+  mcp: "MCP instructions",
+  tools: "Deferred tool listing",
+  context: "Environment and session context",
+};
+
+/** The free, log-based attribution of the real interactive startup, by source then per file/hook. */
+export function formatStartupAttribution(a: StartupAttribution): string {
+  const lines: string[] = [
+    bold("Startup attribution, from your logs (no measurement)"),
+    "",
+    `Real interactive startup: ${fmtTokens(a.calibratedTotal)} tokens, the median first-turn usage across ${a.sessions} recent ${a.model} session(s).`,
+    "",
+  ];
+  const share = (t: number) => (a.calibratedTotal > 0 ? fmtPct(t / a.calibratedTotal) : "-");
+  lines.push(
+    table(
+      ["source", "tokens", "share", "detail"],
+      a.groups.map((g) => [GROUP_LABEL[g.group], fmtTokens(g.tokens), share(g.tokens), g.detail]),
+      ["l", "r", "r", "l"],
+    ),
+  );
+
+  // Per file / per hook / per server drill-down. Explanatory, so it need not sum to the group total.
+  for (const g of ["instructions", "hooks", "mcp"] as StartupGroup[]) {
+    const rows = a.details.filter((r) => r.group === g);
+    if (!rows.length || (rows.length <= 1 && g !== "instructions")) continue;
+    const per = g === "instructions" ? "file" : g === "hooks" ? "hook" : "server";
+    lines.push("", bold(`  ${GROUP_LABEL[g]}, per ${per} (typical cost when a session loads it):`));
+    for (const r of rows) lines.push(`    ${r.label.padEnd(58)} ${fmtTokens(r.tokens).padStart(8)}`);
+  }
+
+  lines.push(
+    "",
+    dim(
+      `The source rows sum to ${fmtTokens(a.calibratedTotal - a.residual)}, within ${fmtTokens(Math.abs(a.residual))} of the ${fmtTokens(a.calibratedTotal)} calibrated total. ` +
+        `About ${fmtTokens(a.reducible)} is reducible (everything but the base); the base (${fmtTokens(a.base)}) is the system prompt and built-in tools, ` +
+        "and cross-checks the ~31.7k that `claude -p` measures, since it loads the base but none of the attachments. Per-source figures are offline byte estimates.",
+    ),
+  );
+  if (a.noisy) lines.push(dim("Some sessions estimated more attachment tokens than their first-turn usage, so their base was clamped to zero; per-source estimates are an upper bound there."));
+  return lines.join("\n");
 }
 
 export function formatConfigSources(sources: ConfigSource[]): string {

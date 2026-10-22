@@ -16,10 +16,12 @@ import type { Severity } from "./types.js";
 import { parseAgents, parsePositiveInt, parseRoots, parseSince, UsageError } from "./options.js";
 import type { Dataset } from "./types.js";
 import { configEnv, scanConfig } from "./config-scan.js";
-import { buildAttribution, formatAttribution, formatConfigSources, formatLogOverhead, logOverhead } from "./overhead.js";
+import { buildAttribution, formatAttribution, formatConfigSources, formatLogOverhead, formatStartupAttribution, logOverhead } from "./overhead.js";
+import { aggregateStartup, readStartupSamples } from "./startup.js";
+import { countUsage } from "./usage.js";
 import { DEFAULT_MEASURE_MODEL, DEFAULT_REPEATS, measure, planClaudeAblation } from "./measure.js";
-import { applyItems as applyFixItems, backupsDir, buildFixItems, formatFixDryRun, listBackups, undo as undoFix } from "./fix.js";
-import { buildProof, formatProof } from "./proof.js";
+import { applyItems as applyFixItems, backupsDir, buildFixItems, formatFixDryRun, listBackups, projectStartup, undo as undoFix } from "./fix.js";
+import { buildProof, buildStartupProof, formatProof, formatStartupProof } from "./proof.js";
 
 interface Common {
   since?: string;
@@ -294,16 +296,34 @@ async function overhead(o: OverheadOpts): Promise<void> {
   const cfg = configEnv({ cwd: process.cwd() });
   const sources = scanConfig(cfg, agents);
 
+  // Free, log-based attribution of the real interactive startup (Claude only).
+  const wantClaude = !agents || agents.includes("claude");
+  const roots = parseRoots(o.root)?.claude;
+  const samples = wantClaude ? await readStartupSamples({ roots, home: cfg.home }).catch(() => []) : [];
+  const startup = aggregateStartup(samples);
+
   if (!o.measure) {
     if (o.json) {
-      console.log(JSON.stringify({ logs, sources }, null, 2));
+      console.log(JSON.stringify({ logs, startup, sources }, null, 2));
       return;
+    }
+    if (startup) {
+      console.log(formatStartupAttribution(startup));
+      console.log("");
     }
     console.log(formatLogOverhead(logs));
     console.log("");
     console.log(formatConfigSources(sources));
     console.log("");
-    console.log(dim("To attribute real tokens to each source: nerf-watch overhead --measure --yes"));
+    if (!startup) {
+      console.log(
+        dim(
+          "No startup attachments in recent sessions (older Claude Code versions did not record them), so the attribution above is from config estimates only.",
+        ),
+      );
+      console.log("");
+    }
+    console.log(dim("The startup attribution is from your logs (free, interactive sessions). To cross-check with real ablation runs: nerf-watch overhead --measure --yes"));
     return;
   }
 
@@ -354,12 +374,18 @@ async function overhead(o: OverheadOpts): Promise<void> {
     if (!o.json) process.stderr.write("\n");
     const attribution = buildAttribution(results, sources, o.measureModel);
     if (o.json) {
-      console.log(JSON.stringify({ logs, sources, measured: results, attribution }, null, 2));
+      console.log(JSON.stringify({ logs, startup, sources, measured: results, attribution }, null, 2));
       return;
+    }
+    if (startup) {
+      console.log(formatStartupAttribution(startup));
+      console.log("");
     }
     console.log(formatLogOverhead(logs));
     console.log("");
     if (attribution) {
+      console.log(dim("Measured cross-check below: these numbers come from ablation runs through `claude -p`, which loads the base but not the interactive attachments above."));
+      console.log("");
       console.log(formatAttribution(attribution));
     } else {
       console.log("Measurement did not produce enough successful runs to attribute overhead. Check that `claude` is on PATH and you are logged in.");
@@ -375,7 +401,11 @@ interface FixOpts extends Common {
   apply?: boolean;
   item?: string | string[];
   yes?: boolean;
+  days: number;
+  threshold: number;
 }
+
+const DAY_MS = 86_400_000;
 
 /**
  * `fix`: list reversible changes that cut overhead. Dry run by default; --apply
@@ -383,22 +413,38 @@ interface FixOpts extends Common {
  */
 async function fix(o: FixOpts): Promise<void> {
   const agents = parseAgents(o.agent);
+  const days = parsePositiveInt("--days", o.days);
+  const threshold = Number(o.threshold);
+  if (!Number.isInteger(threshold) || threshold < 0) throw new UsageError(`--threshold must be a whole number, 0 or more, got "${o.threshold}"`);
   const cfg = configEnv({ cwd: process.cwd() });
   const sources = scanConfig(cfg, agents);
-  const items = buildFixItems(cfg, sources);
+
+  // Usage over the window and the real startup total, both from the logs (Claude only).
+  const wantClaude = !agents || agents.includes("claude");
+  const roots = parseRoots(o.root)?.claude;
+  const since = Date.now() - days * DAY_MS;
+  const usage = wantClaude ? await countUsage({ roots, home: cfg.home, since }).catch(() => null) : null;
+  const samples = wantClaude ? await readStartupSamples({ roots, home: cfg.home }).catch(() => []) : [];
+  const startup = aggregateStartup(samples);
+
+  const items = buildFixItems(cfg, sources, { usage, threshold, startup });
   const picked = o.item ? (Array.isArray(o.item) ? o.item : [o.item]).flatMap((x) => String(x).split(",")).map((s) => s.trim()).filter(Boolean) : [];
 
   if (!o.apply) {
+    // Projected drop for the visible (non-member) edit items.
+    const visibleEditIds = items.filter((i) => i.kind === "edit" && !i.member).map((i) => i.id);
+    const projected = startup ? projectStartup(items, visibleEditIds, startup.calibratedTotal) : undefined;
     if (o.json) {
-      console.log(JSON.stringify({ items: items.map((i) => ({ id: i.id, agent: i.agent, title: i.title, kind: i.kind, estTokensSaved: i.estTokensSaved, changes: i.changes.map((c) => ({ path: c.path.replace(cfg.home, "~"), summary: c.summary })), caveat: i.caveat })) }, null, 2));
+      console.log(JSON.stringify({ window: { days, threshold, sessionsScanned: usage?.sessionsScanned ?? 0 }, projected, items: items.map((i) => ({ id: i.id, agent: i.agent, title: i.title, kind: i.kind, member: i.member, group: i.group, estTokensSaved: i.estTokensSaved, changes: i.changes.map((c) => ({ path: c.path.replace(cfg.home, "~"), summary: c.summary })), moves: (i.moves ?? []).map((m) => ({ from: m.from.replace(cfg.home, "~"), to: m.to.replace(cfg.home, "~") })), caveat: i.caveat })) }, null, 2));
       return;
     }
-    console.log(formatFixDryRun(items, cfg.home));
+    if (usage) console.log(dim(`Usage window: last ${days} day(s), ${usage.sessionsScanned} session(s). Proposing skills and subagents used ${threshold} time(s) or fewer.`));
+    console.log(formatFixDryRun(items, cfg.home, projected));
     return;
   }
 
   // Apply.
-  const editIds = items.filter((i) => i.kind === "edit").map((i) => i.id);
+  const editIds = items.filter((i) => i.kind === "edit" && !i.member).map((i) => i.id);
   const toApply = picked.length ? picked : editIds; // --item names a subset; nothing preselected without it in interactive use
   if (!picked.length && !o.yes && process.stdin.isTTY) {
     // Interactive: nothing preselected. Ask the user to pass --item since we avoid a TUI dependency.
@@ -410,7 +456,7 @@ async function fix(o: FixOpts): Promise<void> {
   }
   const unknown = toApply.filter((id) => !items.some((i) => i.id === id));
   if (unknown.length) throw new UsageError(`Unknown fix item(s): ${unknown.join(", ")}. Run \`nerf-watch fix\` to list ids.`);
-  const result = applyItems(cfg, toApply);
+  const result = applyFixItems(cfg, items, toApply);
   if (o.json) {
     console.log(JSON.stringify({ ...result, changed: result.changed.map((c) => ({ path: c.path.replace(cfg.home, "~"), summary: c.summary })) }, null, 2));
     return;
@@ -421,14 +467,15 @@ async function fix(o: FixOpts): Promise<void> {
   }
   console.log(bold(`Applied ${result.changed.length} change(s). Every touched file was backed up first.`));
   for (const c of result.changed) console.log(`  ${c.summary}`);
+  if (startup) {
+    const p = projectStartup(items, toApply, startup.calibratedTotal);
+    if (p.saved > 0) {
+      console.log("");
+      console.log(bold(`Startup ~${(p.before / 1000).toFixed(1)}k -> ~${(p.after / 1000).toFixed(1)}k tokens per session (-${Math.round((p.saved / Math.max(1, p.before)) * 100)}%). Prove it after a few sessions: nerf-watch proof`));
+    }
+  }
   console.log("");
   console.log(dim(`Backup id ${result.backupId}. Undo exactly with: nerf-watch undo`));
-}
-
-function applyItems(cfg: ReturnType<typeof configEnv>, ids: string[]) {
-  const sources = scanConfig(cfg);
-  const items = buildFixItems(cfg, sources);
-  return applyFixItems(cfg, items, ids);
 }
 
 interface UndoOpts {
@@ -484,9 +531,17 @@ async function proof(o: ProofOpts): Promise<void> {
   const ds = await load(o);
   if (!ds.turns.length) return noData(ds, o);
   const report = buildProof(ds, fixTs);
+  const roots = parseRoots(o.root)?.claude;
+  const samples = await readStartupSamples({ roots, home: cfg.home }).catch(() => []);
+  const startupProof = buildStartupProof(samples, fixTs);
   if (o.json) {
-    console.log(JSON.stringify(report, null, 2));
+    console.log(JSON.stringify({ ...report, startup: startupProof }, null, 2));
     return;
+  }
+  const startupText = formatStartupProof(startupProof);
+  if (startupText) {
+    console.log(startupText);
+    console.log("");
   }
   console.log(formatProof(report));
   if (o.card) {
@@ -610,6 +665,8 @@ export function buildCli() {
     .option("--apply", "Apply the selected items (use --item to choose); backs up every touched file")
     .option("--item <id>", "Apply this fix item id (repeatable); nothing is applied without it", {})
     .option("--yes", "Allow apply without an interactive selection")
+    .option("--days <n>", "Usage window for the unused-skill and unused-agent proposals", { default: 60 })
+    .option("--threshold <n>", "Propose skills and subagents used this many times or fewer in the window", { default: 0 })
     .action(fix);
 
   cli

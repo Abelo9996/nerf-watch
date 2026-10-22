@@ -8,42 +8,58 @@ English | [简体中文](README.zh-CN.md)
 
 Find what is eating your Claude Code and Codex limits, fix it in one command, and prove it from your own logs.
 
-Every request pays for the context loaded before you type: the system prompt, your CLAUDE.md / AGENTS.md, MCP tool schemas, skills, plugins, and context that hooks inject at session start. It is the hidden drain on your usage limits. nerf-watch measures it, attributes it to real sources using your agent's own CLI flags (no config is edited to measure), applies reversible fixes you choose, and then compares your sessions before and after so you can see it worked. Everything runs locally. Nothing is uploaded.
+Every request pays for the context loaded before you type: the system prompt, your CLAUDE.md / AGENTS.md, MCP tool schemas, the listing of every skill and subagent, plugins, and context that hooks inject at session start. It is the hidden drain on your usage limits. nerf-watch attributes it to real sources straight from your logs (free, no config edited), applies reversible fixes you choose, and then compares your sessions before and after so you can see it worked. Everything runs locally. Nothing is uploaded.
 
 ## Quickstart
 
 Requires Node.js 20 or newer.
 
 ```sh
-npx nerf-watch overhead --measure --yes   # what you pay before you type, attributed to sources
-npx nerf-watch fix                        # reversible changes that cut it (dry run)
-npx nerf-watch proof                      # before vs after, from your own logs
+npx nerf-watch overhead   # what you pay before you type, attributed to every source
+npx nerf-watch fix        # reversible changes that cut it (dry run)
+npx nerf-watch proof      # before vs after, from your own logs
 ```
 
-`overhead` reads your startup tokens and cache hit rate from the logs, lists the config sources (read only), and with `--measure` runs a few ablation runs through the agent CLI to attribute real tokens per source. It shows the run count and cost first and spends nothing without `--yes`. Example, trimmed, from a real setup:
+`overhead` reads the startup injections Claude Code records in your session logs, sizes each one, and calibrates them against the first-turn token usage of your own sessions, so it attributes the real interactive startup for free. The base row (the system prompt and built-in tools, the part no log carries) cross-checks the ~31.7k that `claude -p` measures. Example from a real setup, project names redacted:
 
 ```text
-Measured attribution (model claude-haiku-5-5, $0.0218 spent)
+Startup attribution, from your logs (no measurement)
 
-source                                 tokens/req  share  evidence
--------------------------------------  ----------  -----  -------------------------------------------------------
-Base system prompt and built-in tools       17.8k  56.0%  measured floor: no MCP and no user sources
-User settings, hooks and skills             11.3k  35.5%  measured: user setting sources on vs off; includes
-                                                          Skills (69), SessionStart hook(s) (3)
-MCP server "headroom"                          216   0.7%  measured: startup with vs without this server
-User memory (CLAUDE.md)                         64   0.2%  measured: a temp copy of the memory file added
+Real interactive startup: 52.2k tokens, the median first-turn usage across 18 recent claude-opus-5-5 session(s).
 
-Measured startup total: 31.7k tokens. The parts above sum to within 2,415 of it (measurement noise).
+source                                 tokens  share  detail
+-------------------------------------  ------  -----  ----------------------------------------------------------------------
+Base system prompt and built-in tools   31.1k  59.6%  system prompt and built-in tools; cross-checks the `claude -p` startup
+Skill listing                           7,047  13.5%  skill descriptions in the system prompt
+Instructions (CLAUDE.md)                3,556   6.8%  11 file(s) per session (typical)
+Agent listing                           3,257   6.2%  39 user agent(s) plus 6 built-in
+SessionStart hooks                      1,483   2.8%  2 hook(s)
+Deferred tool listing                   1,098   2.1%  deferred tool search listing
+MCP instructions                          651   1.2%  3 server(s)
+Environment and session context           350   0.7%  environment and session context
 ```
 
-`fix` turns that into reversible, non-destructive changes (dry run by default). It never deletes: an MCP server is disabled by stashing it under a nerf-watch key, a bulky memory section is moved into an on-demand file with a pointer, hooks are flagged but never edited. Every touched file is backed up, and `nerf-watch undo` restores it byte for byte.
+It then drills down per file, per hook and per MCP server, and keeps `--measure` as an optional cross-check that runs a few ablation runs through `claude -p` (shown with the cost first, spends nothing without `--yes`).
+
+`fix` turns that into reversible, non-destructive changes (dry run by default). Over a window (default 60 days, `--days`) it finds the skills and subagents you never actually invoked, costed from the attribution above, and offers to stash them. It never deletes: a skill or subagent directory is moved into `~/.claude/.nerf-watch-stash`, an MCP server is disabled under a nerf-watch key, a bulky memory section is moved into an on-demand file with a pointer, hooks are flagged but never edited. Every change is backed up, and `nerf-watch undo` restores it byte for byte.
+
+```text
+  [stash-skills:gsd] (~4,602 tokens/request)  Stash all 67 never used gsd-* skills
+    These 67 skills all begin with "gsd-" and were never used in the window. Each is moved into
+    ~/.claude/.nerf-watch-stash/skills (not deleted); undo moves them all back.
+  [stash-agents:gsd] (~1,930 tokens/request)  Stash all 33 never used gsd-* subagents
+  [trim-memory:...]  (~609 tokens/request)  Move the bulky memory section out of CLAUDE.md
+  [disable-mcp:headroom]  Disable the global MCP server "headroom"
+
+If you apply the edit items above: startup ~52.2k tokens -> ~45.0k tokens per session (-14%).
+```
 
 ```sh
-npx nerf-watch fix --apply --item disable-mcp:headroom   # apply only what you pick
-npx nerf-watch undo                                       # exact restore
+npx nerf-watch fix --apply --item stash-skills:gsd,stash-agents:gsd   # apply only what you pick
+npx nerf-watch undo                                                    # exact restore, byte for byte
 ```
 
-`proof` compares your sessions from before and after the fix timestamp (the newest fix backup, or `--since-fix`): startup tokens, tokens per turn, cache hit rate, and how many more sessions fit in a usage window. It is honest when there are too few sessions yet to say.
+`proof` compares your sessions from before and after the fix timestamp (the newest fix backup, or `--since-fix`): the attachment-based startup the fix removes, the real first-turn usage, tokens per turn, cache hit rate, and how many more sessions fit in a usage window. It is honest when there are too few sessions yet to say.
 
 ### It also catches silent regressions
 
@@ -66,8 +82,9 @@ npx nerf-watch phantom                       # turns where the agent said it cha
 
 ### Honest limits
 
-- Measured attribution runs through the Claude Code CLI only. For Codex, `overhead` shows config and log evidence and says plainly what is not measured.
-- Token sizes shown without a measurement (for CLAUDE.md, AGENTS.md, skills) are a local offline estimate, about four characters per token. The `--measure` numbers are authoritative.
+- Log-based attribution needs the startup attachments recent Claude Code versions record. Older sessions without them fall back to config estimates, and `overhead` says so. Measured attribution (`--measure`) and the usage-aware `fix` proposals are Claude only; for Codex, `overhead` shows config and log evidence and says plainly what is not measured.
+- The per-source token figures are a local offline estimate, about four characters per token. They are calibrated against your real first-turn usage, so the rows sum to the real startup within a stated tolerance and the base cross-checks `claude -p`; individual source numbers are still estimates.
+- `fix` proposes only skills and subagents it never saw invoked in the window; a skill you use rarely but importantly can be caught, so review the list. Plugin-provided skills are disabled through the plugin, never deleted.
 - `proof` needs enough sessions on both sides of the fix; until then it tells you to come back later rather than guess.
 - It is not a cost meter. Tools like [ccusage](https://github.com/ryoppippi/ccusage) tell you what you spent; nerf-watch tells you what is fixed overhead and whether a change helped.
 

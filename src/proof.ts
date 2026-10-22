@@ -7,6 +7,7 @@
  */
 import type { Dataset, Turn } from "./types.js";
 import { cacheHitRate, mainTurns, median, modelOf, promptTokens, warmTurns } from "./metrics.js";
+import { reducibleTotal, type StartupSample } from "./startup.js";
 import { bold, dim, fmtPct, fmtTokens, table } from "./format.js";
 
 const DAY = 86_400_000;
@@ -99,6 +100,60 @@ export function sessionsStillNeeded(report: ProofReport): number {
   const have = report.best.afterSessions;
   const need = PROOF_MIN.startupSessions;
   return Math.max(0, need - have) || Math.max(0, need - report.best.beforeSessions);
+}
+
+// ------------------------------------------ attachment-based startup proof
+
+export interface StartupProofSide {
+  sessions: number;
+  /** Median reducible attachment tokens (what the fix removes). */
+  attachment: number | null;
+  /** Median real first-turn usage. */
+  firstTurn: number | null;
+}
+
+export interface StartupProof {
+  before: StartupProofSide;
+  after: StartupProofSide;
+}
+
+function side(samples: StartupSample[]): StartupProofSide {
+  if (!samples.length) return { sessions: 0, attachment: null, firstTurn: null };
+  return {
+    sessions: samples.length,
+    attachment: median(samples.map(reducibleTotal)),
+    firstTurn: median(samples.map((s) => s.calibratedTotal)),
+  };
+}
+
+/** Split startup samples by the fix timestamp and compare the reducible attachment total and real first-turn usage. */
+export function buildStartupProof(samples: StartupSample[], fixTimestamp: number): StartupProof {
+  return {
+    before: side(samples.filter((s) => s.timestamp < fixTimestamp)),
+    after: side(samples.filter((s) => s.timestamp >= fixTimestamp)),
+  };
+}
+
+export function formatStartupProof(p: StartupProof): string | null {
+  if (!p.before.sessions && !p.after.sessions) return null;
+  const arrow = (b: number | null, a: number | null) => `${b === null ? "?" : fmtTokens(b)} -> ${a === null ? "?" : fmtTokens(a)}`;
+  const lines = [
+    bold("Startup from attachments, before vs after the fix"),
+    "",
+    table(
+      ["signal", "before -> after", "before/after sessions"],
+      [
+        ["attachment-based startup (reducible)", arrow(p.before.attachment, p.after.attachment), `${p.before.sessions} / ${p.after.sessions}`],
+        ["real first-turn usage (whole startup)", arrow(p.before.firstTurn, p.after.firstTurn), `${p.before.sessions} / ${p.after.sessions}`],
+      ],
+      ["l", "l", "r"],
+    ),
+    "",
+    dim(
+      "attachment-based startup sums the skill/agent/instruction/hook/MCP tokens the fix can remove; real first-turn usage is the whole prompt the API billed on the first turn. Both are medians from your own logs.",
+    ),
+  ];
+  return lines.join("\n");
 }
 
 // --------------------------------------------------------------- formatting
