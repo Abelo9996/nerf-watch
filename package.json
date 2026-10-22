@@ -1,6 +1,6 @@
 {
   "name": "nerf-watch",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Find out when your coding agent quietly got worse or more expensive. Reads local Claude Code and Codex session logs and flags changes you did not make.",
   "type": "module",
   "bin": {
@@ -50,6 +50,7 @@
   "homepage": "https://github.com/Abelo9996/nerf-watch#readme",
   "bugs": "https://github.com/Abelo9996/nerf-watch/issues",
   "dependencies": {
+    "@resvg/resvg-wasm": "^2.6.2",
     "cac": "^6.7.14"
   },
   "devDependencies": {

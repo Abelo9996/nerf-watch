@@ -553,3 +553,98 @@ export function renderCardSvg(m: CardModel): string {
 export function buildCard(p: SharePayload, o: CardOptions = {}): string {
   return renderCardSvg(cardModel(p, o));
 }
+
+// ------------------------------------------------------------ proof card
+
+export interface ProofCardRow {
+  title: string;
+  before: string;
+  after: string;
+  unit: string;
+  /** "down" is good for overhead; "up" is good for cache hit. Drives the arrow color. */
+  good: boolean;
+}
+
+export interface ProofCardModel {
+  headline: string;
+  agent: string;
+  model: string;
+  fixDate: string;
+  rows: ProofCardRow[];
+  responses: number;
+  sessions: number;
+  version: string;
+}
+
+/** Build a before/after proof card from the top ready row of a proof report. */
+export function proofCardModel(
+  report: import("./proof.js").ProofReport,
+  meta: { version: string; responses: number; sessions: number },
+): ProofCardModel | null {
+  const row = report.rows.find((r) => r.ready);
+  if (!row) return null;
+  const rows: ProofCardRow[] = [];
+  const pct = (b: number, a: number) => (b > 0 ? (a - b) / b : 0);
+  if (row.startup.before !== null && row.startup.after !== null) {
+    rows.push({ title: "Startup overhead", before: fmtTokens(row.startup.before), after: fmtTokens(row.startup.after), unit: "tokens per session start", good: row.startup.after <= row.startup.before });
+  }
+  if (row.cacheHit.before !== null && row.cacheHit.after !== null) {
+    rows.push({ title: "Cache hit rate", before: fmtPct(row.cacheHit.before), after: fmtPct(row.cacheHit.after), unit: "cached share of prompt", good: row.cacheHit.after >= row.cacheHit.before });
+  }
+  if (row.perTurn.before !== null && row.perTurn.after !== null) {
+    rows.push({ title: "Prompt tokens per turn", before: fmtTokens(row.perTurn.before), after: fmtTokens(row.perTurn.after), unit: "tokens per request", good: row.perTurn.after <= row.perTurn.before });
+  }
+  const sp = pct(row.startup.before!, row.startup.after!);
+  const headline =
+    Math.abs(sp) < 0.05
+      ? `Startup overhead about the same after the fix`
+      : sp < 0
+        ? `Startup overhead down ${Math.round(-sp * 100)}% after the fix`
+        : `Startup overhead up ${Math.round(sp * 100)}% after the fix`;
+  return { headline, agent: row.agent, model: row.model, fixDate: report.fixDate, rows, responses: meta.responses, sessions: meta.sessions, version: meta.version };
+}
+
+export function renderProofCardSvg(m: ProofCardModel): string {
+  const out: string[] = [];
+  out.push(`<rect width="${CARD_WIDTH}" height="${CARD_HEIGHT}" ${fill("bg")}/>`);
+  out.push(ruler());
+
+  out.push(logo(PAD, 56, 36));
+  out.push(text("nerf-watch", { x: PAD + 50, y: 86, size: 32, weight: 700, color: "ink", spacing: -0.3 }));
+  out.push(text(`fix applied ${m.fixDate}`, { x: RIGHT, y: 84, size: 22, mono: true, color: "muted", anchor: "end" }));
+
+  const hl = fitHeadline(m.headline, RIGHT - PAD);
+  const lh = Math.round(hl.size * 1.12);
+  let y = 118 + hl.size;
+  hl.lines.forEach((line, i) => out.push(text(line, { x: PAD, y: y + i * lh, size: hl.size, weight: 760, color: "ink", spacing: -0.6 })));
+  y += (hl.lines.length - 1) * lh;
+
+  out.push(chip("PROOF", PAD, y + 24, "pass", "passInk"));
+  out.push(text(`${agentName(m.agent)} · ${m.model} · before vs after the fix`, { x: PAD + 128, y: y + 49, size: 22, color: "ink2" }));
+
+  // At most two rows, so the layout clears the footer even with a two-line headline.
+  let top = y + 84;
+  const rowH = 84;
+  for (const r of m.rows.slice(0, 2)) {
+    out.push(`<path d="M${PAD} ${top + 0.5}H${RIGHT}" stroke-width="1" ${stroke("rule")}/>`);
+    out.push(text(fitText(r.title, 28, 520, "bold"), { x: PAD, y: top + 42, size: 28, weight: 650, color: "ink" }));
+    const nums = `${r.before} → ${r.after}`;
+    out.push(text(nums, { x: RIGHT, y: top + 42, size: 32, weight: 700, mono: true, color: r.good ? "accent" : "alert", anchor: "end" }));
+    if (r.unit) out.push(text(r.unit, { x: RIGHT, y: top + 72, size: 21, mono: true, color: "muted", anchor: "end" }));
+    top += rowH;
+  }
+
+  out.push(text(fitMono([plural(m.responses, "model response"), plural(m.sessions, "session"), agentName(m.agent)].join(" · "), 21, RIGHT - PAD), { x: PAD, y: 552, size: 20, mono: true, color: "muted" }));
+  out.push(footer());
+
+  const desc = `${m.headline}. ${m.rows.map((r) => `${r.title}: ${r.before} to ${r.after} ${r.unit}`.trim()).join("; ")}. Checked with nerf-watch: ${CARD_COMMAND}, ${CARD_REPO}.`;
+  return [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${CARD_WIDTH}" height="${CARD_HEIGHT}" viewBox="0 0 ${CARD_WIDTH} ${CARD_HEIGHT}" role="img" aria-labelledby="nw-title nw-desc" font-family="${SANS}">`,
+    `<title id="nw-title">${escapeXml(m.headline)}</title>`,
+    `<desc id="nw-desc">${escapeXml(desc)}</desc>`,
+    style(),
+    ...out,
+    "</svg>",
+    "",
+  ].join("\n");
+}
