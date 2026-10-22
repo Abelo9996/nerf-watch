@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-## [0.5.0] - unreleased
+## [0.5.0] - 2026-10-22
 
 nerf-watch now delivers its headline end to end: see what loads into every Claude Code session before you type, cut the parts you never use in one command, and prove it from your own logs. Every finding used to end in "report it to the vendor"; now it ends in a smaller, measured, reversible change.
 
@@ -26,6 +26,11 @@ nerf-watch now delivers its headline end to end: see what loads into every Claud
 ### Changed
 
 - `card --out` accepts `.png` and renders it in process. The previous behavior (refuse PNG and print `rsvg-convert` instructions) is gone.
+
+### Also in 0.5.0
+- The startup-growth finding and the share card split the growth into Claude Code's own base prompt and your add-ons (skills, agents, hooks, memory files, MCP servers), so a card no longer blames the CLI when the cause is local.
+- Startup attribution counts interactive sessions only (CLI and desktop app). Scripted `claude -p` and Agent SDK sessions load a different startup and are left out unless asked.
+- `proof` reports how much of each request the startup change saves, instead of a sessions-per-limit ratio that overstated the gain when warm requests are much larger than the startup.
 
 ## [0.4.0] - 2026-10-07
 

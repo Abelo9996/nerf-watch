@@ -25,18 +25,15 @@ npx nerf-watch proof      # before vs after, from your own logs
 ```text
 Startup attribution, from your logs (no measurement)
 
-Real interactive startup: 52.2k tokens, the median first-turn usage across 18 recent claude-opus-5-5 session(s).
+Real interactive startup: 35.5k tokens, the median first-turn usage across 70 recent claude-opus-5-5 session(s). Scripted claude -p and SDK sessions are left out.
 
 source                                 tokens  share  detail
 -------------------------------------  ------  -----  ----------------------------------------------------------------------
-Base system prompt and built-in tools   31.1k  59.6%  system prompt and built-in tools; cross-checks the `claude -p` startup
-Skill listing                           7,047  13.5%  skill descriptions in the system prompt
-Instructions (CLAUDE.md)                3,556   6.8%  11 file(s) per session (typical)
-Agent listing                           3,257   6.2%  39 user agent(s) plus 6 built-in
-SessionStart hooks                      1,483   2.8%  2 hook(s)
-Deferred tool listing                   1,098   2.1%  deferred tool search listing
-MCP instructions                          651   1.2%  3 server(s)
-Environment and session context           350   0.7%  environment and session context
+Base system prompt and built-in tools   23.0k  64.7%  system prompt and built-in tools; cross-checks the `claude -p` startup
+Skill listing                           6,973  19.7%  100 skill description(s) in the system prompt
+Deferred tool listing                   3,460   9.8%  deferred tool search listing
+Instructions (CLAUDE.md)                1,977   5.6%  12 file(s) per session (typical)
+Environment and session context           377   1.1%  environment and session context
 ```
 
 It then drills down per file, per hook and per MCP server, and keeps `--measure` as an optional cross-check that runs a few ablation runs through `claude -p` (shown with the cost first, spends nothing without `--yes`).
@@ -51,7 +48,7 @@ It then drills down per file, per hook and per MCP server, and keeps `--measure`
   [trim-memory:...]  (~609 tokens/request)  Move the bulky memory section out of CLAUDE.md
   [disable-mcp:headroom]  Disable the global MCP server "headroom"
 
-If you apply the edit items above: startup ~52.2k tokens -> ~45.0k tokens per session (-14%).
+If you apply the edit items above: startup ~35.6k tokens -> ~28.4k tokens per session (-20%).
 ```
 
 ```sh
