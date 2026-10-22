@@ -6,6 +6,25 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - unreleased
+
+nerf-watch now delivers its headline end to end: find what is eating your Claude Code and Codex limits, fix it in one command, and prove it from your own logs. Every finding used to end in "report it to the vendor"; now it ends in a smaller, measured, reversible change.
+
+### Added
+
+- `nerf-watch overhead` shows what you pay before you type anything, and why. From the logs: median startup tokens per agent and model, the trend, cache hit rate, and the share of a typical request that is fixed startup overhead. From config (read only): the sources that make it up, namely user and project CLAUDE.md / AGENTS.md (token count estimated locally), MCP servers (Claude `~/.claude.json` and project `.mcp.json`; Codex `~/.codex/config.toml`), skills, plugins, context-injecting SessionStart / UserPromptSubmit hooks, and the effort and model defaults.
+- `nerf-watch overhead --measure` attributes real tokens to each source with ablation runs through the agent's own CLI flags (`--strict-mcp-config`, `--setting-sources`, `--mcp-config`, `--add-dir`); no config file is edited to measure. Each profile is repeated to beat noise, the cheapest model that keeps the system-prompt shape is used, and the real dollar cost is summed from the CLI. It prints the run count and estimated cost first and spends nothing without `--yes`. Output is a ranked table of source, tokens per request, share and evidence, whose parts add back up to the measured startup total (within stated noise). Measured attribution is Claude Code only; for Codex, config and log evidence are shown and what is not measured is stated plainly.
+- `nerf-watch fix` turns the overhead into reversible, non-destructive changes (dry run by default; `--apply` applies only the items selected with `--item`, nothing preselected; `--json` for agents). It disables a global MCP server by stashing it under a nerf-watch key (not deleting it), moves a bulky memory section into an on-demand file with a pointer, pins an explicit effort level when unset, and flags context-injecting hooks and tool search as advice without editing hook scripts. Credentials are never touched. Every touched file is backed up first.
+- `nerf-watch undo` restores every file a `fix --apply` changed, byte for byte, and removes files the fix created.
+- `nerf-watch proof` compares your sessions from before and after the fix timestamp (the newest fix backup, or `--since-fix`): startup tokens, tokens per turn, cache hit rate, and an estimate of how many more sessions fit in a usage window. It is honest when there are too few sessions on either side, and `--card` writes a before/after image.
+- `nerf-watch card --out card.png` now renders the PNG in process with a bundled WASM rasterizer (no librsvg or headless browser). Fonts already on the machine are read and passed to the rasterizer as buffers; nothing is bundled or downloaded, and the WASM module is loaded lazily only when a PNG is made.
+- A progress line while reading logs on slow first runs.
+- Library API: `logOverhead`, `buildAttribution`, `scanConfig`, `measure`/`planClaudeAblation`, `buildFixItems`/`applyItems`/`undo`, `buildProof`, `proofCardModel`/`renderProofCardSvg`, `svgToPng`, and `estimateTokens`.
+
+### Changed
+
+- `card --out` accepts `.png` and renders it in process. The previous behavior (refuse PNG and print `rsvg-convert` instructions) is gone.
+
 ## [0.4.0] - 2026-10-07
 
 ### Added

@@ -6,30 +6,70 @@ English | [简体中文](README.zh-CN.md)
 
 ![nerf-watch check run on synthetic Claude Code logs, flagging a silent model swap from claude-opus-5 to claude-sonnet-5, a cache-write jump and a cache hit rate collapse after a CLI update](docs/demo.gif)
 
-Find out when your coding agent quietly got worse or more expensive.
+Find what is eating your Claude Code and Codex limits, fix it in one command, and prove it from your own logs.
 
-nerf-watch reads the session logs that Claude Code and Codex already write on your machine and flags changes you did not make: a different model answered than the one you picked, reasoning effort dropped, the context window shrank, cache writes per turn jumped after a CLI update, the cache hit rate collapsed, or tool calls started failing more often. Everything runs locally. Nothing is uploaded.
-
-It is not a cost meter. Tools like [ccusage](https://github.com/ryoppippi/ccusage) already tell you what you spent. nerf-watch compares your own history across CLI versions and over time, and tells you what changed and when.
+Every request pays for the context loaded before you type: the system prompt, your CLAUDE.md / AGENTS.md, MCP tool schemas, skills, plugins, and context that hooks inject at session start. It is the hidden drain on your usage limits. nerf-watch measures it, attributes it to real sources using your agent's own CLI flags (no config is edited to measure), applies reversible fixes you choose, and then compares your sessions before and after so you can see it worked. Everything runs locally. Nothing is uploaded.
 
 ## Quickstart
 
 Requires Node.js 20 or newer.
 
 ```sh
+npx nerf-watch overhead --measure --yes   # what you pay before you type, attributed to sources
+npx nerf-watch fix                        # reversible changes that cut it (dry run)
+npx nerf-watch proof                      # before vs after, from your own logs
+```
+
+`overhead` reads your startup tokens and cache hit rate from the logs, lists the config sources (read only), and with `--measure` runs a few ablation runs through the agent CLI to attribute real tokens per source. It shows the run count and cost first and spends nothing without `--yes`. Example, trimmed, from a real setup:
+
+```text
+Measured attribution (model claude-haiku-5-5, $0.0218 spent)
+
+source                                 tokens/req  share  evidence
+-------------------------------------  ----------  -----  -------------------------------------------------------
+Base system prompt and built-in tools       17.8k  56.0%  measured floor: no MCP and no user sources
+User settings, hooks and skills             11.3k  35.5%  measured: user setting sources on vs off; includes
+                                                          Skills (69), SessionStart hook(s) (3)
+MCP server "headroom"                          216   0.7%  measured: startup with vs without this server
+User memory (CLAUDE.md)                         64   0.2%  measured: a temp copy of the memory file added
+
+Measured startup total: 31.7k tokens. The parts above sum to within 2,415 of it (measurement noise).
+```
+
+`fix` turns that into reversible, non-destructive changes (dry run by default). It never deletes: an MCP server is disabled by stashing it under a nerf-watch key, a bulky memory section is moved into an on-demand file with a pointer, hooks are flagged but never edited. Every touched file is backed up, and `nerf-watch undo` restores it byte for byte.
+
+```sh
+npx nerf-watch fix --apply --item disable-mcp:headroom   # apply only what you pick
+npx nerf-watch undo                                       # exact restore
+```
+
+`proof` compares your sessions from before and after the fix timestamp (the newest fix backup, or `--since-fix`): startup tokens, tokens per turn, cache hit rate, and how many more sessions fit in a usage window. It is honest when there are too few sessions yet to say.
+
+### It also catches silent regressions
+
+The original nerf-watch job still runs:
+
+```sh
 npx nerf-watch check
 ```
 
-That reads every Claude Code and Codex session on the machine and prints a one-line verdict, then each finding: what changed, the numbers before and after with how much data they rest on, and what to do next. It exits with status 1 if any alert fired. With no logs, or too little history to compare, it says so and what to do. Other commands:
+That reads every Claude Code and Codex session on the machine and flags changes you did not make: a different model answered than the one you picked, reasoning effort dropped, the context window shrank, cache writes per turn jumped after a CLI update, the cache hit rate collapsed, or tool calls started failing more often. It prints a one-line verdict then each finding with the numbers before and after and how much data they rest on, and exits 1 if any alert fired. Other commands:
 
 ```sh
 npx nerf-watch scan                          # baselines per CLI version and model
 npx nerf-watch check --since 30d --agent claude
 npx nerf-watch report --out nerf-watch-report.md   # anonymized, shareable
 npx nerf-watch share                         # contribute findings to the public regression watch
-npx nerf-watch card                          # a 1200x630 image of your result to post
+npx nerf-watch card --out card.png           # a 1200x630 image of your result to post (SVG or PNG)
 npx nerf-watch phantom                       # turns where the agent said it changed code but made no edit
 ```
+
+### Honest limits
+
+- Measured attribution runs through the Claude Code CLI only. For Codex, `overhead` shows config and log evidence and says plainly what is not measured.
+- Token sizes shown without a measurement (for CLAUDE.md, AGENTS.md, skills) are a local offline estimate, about four characters per token. The `--measure` numbers are authoritative.
+- `proof` needs enough sessions on both sides of the fix; until then it tells you to come back later rather than guess.
+- It is not a cost meter. Tools like [ccusage](https://github.com/ryoppippi/ccusage) tell you what you spent; nerf-watch tells you what is fixed overhead and whether a change helped.
 
 Homebrew (macOS and Linux): `brew install abelo9996/tap/nerf-watch`, then run `nerf-watch check` without `npx`.
 
