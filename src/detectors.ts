@@ -530,17 +530,46 @@ export function detectModelMismatch(ds: Dataset): Finding[] {
 
 const PUBLIC_MODEL = /^(claude-[a-z]+-\d[\w.-]*|claude-\d[\w.-]*|gpt-\d[\w.-]*|o\d[\w.-]*|codex-[\w.-]+|gemini-[\w.-]+|deepseek-[\w.-]+|qwen[\w.-]*|kimi-[\w.-]+|glm-[\w.-]+|grok-[\w.-]+)$/i;
 const INTERNAL_HINT = /(internal|experiment|\bexp\b|-exp-|staging|canary|shadow|sandbox|nightly|snapshot|eval|test|dev-|-ab-|alpha|bench)/i;
+// "vendor/model" ids, optionally with a ":free" style variant, come from a gateway the user set up (OpenRouter and similar).
+const GATEWAY_MODEL = /^[a-z0-9][\w.-]*\/[\w.-]+(:[\w.-]+)?$/i;
 
 /** A served model id that does not look like a public model id. */
 export function detectHiddenModels(ds: Dataset): Finding[] {
   const out: Finding[] = [];
   const seen = new Map<string, { agent: string; model: string; turns: Turn[] }>();
+  const gateway = new Map<string, { models: Set<string>; turns: Turn[] }>();
   for (const t of ds.turns) {
     if (!t.servedModel) continue;
+    if (GATEWAY_MODEL.test(t.servedModel)) {
+      const gw = gateway.get(t.agent) ?? { models: new Set<string>(), turns: [] };
+      gw.models.add(t.servedModel);
+      gw.turns.push(t);
+      gateway.set(t.agent, gw);
+      continue;
+    }
     const k = `${t.agent}\u0000${t.servedModel}`;
     const g = seen.get(k) ?? { agent: t.agent, model: t.servedModel, turns: [] };
     g.turns.push(t);
     seen.set(k, g);
+  }
+  for (const [agent, gw] of gateway) {
+    const models = [...gw.models].sort();
+    const versions = [...new Set(gw.turns.map((t) => t.cliVersion ?? "unknown"))].sort(compareVersions);
+    out.push({
+      id: "gateway-models",
+      severity: "info",
+      agent,
+      model: models[0],
+      trigger: "event",
+      title: `${models.length} model(s) answered through a gateway you configured`,
+      explanation:
+        `${gw.turns.length} API responses came from "vendor/model" ids (${models.join(", ")}). ` +
+        `That id format comes from a model gateway such as OpenRouter set in your own config, not from the agent's vendor, so these turns are not checked for hidden models.`,
+      nextStep: `Nothing to do unless you never set up a gateway or proxy.`,
+      evidence: [
+        { label: "served", versions, ...span({ turns: gw.turns, tools: [], compactions: [] }), samples: gw.turns.length, sampleUnit: "turns", value: gw.turns.length, display: `${gw.turns.length} turns` },
+      ],
+    });
   }
   for (const g of seen.values()) {
     const m = normalizeModel(g.model);

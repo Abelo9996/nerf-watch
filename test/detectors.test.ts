@@ -220,6 +220,18 @@ describe("model and effort detectors", () => {
     expect(detectHiddenModels(ds).map((f) => f.model).sort()).toEqual(["falcon-internal-ab-7", "gpt-5.5-internal-eval"]);
   });
 
+  it("reports gateway model ids once as info, not as hidden models", () => {
+    const ds = build([
+      { version: "2.1.1", day: 0, model: "deepseek/deepseek-v4-flash", sessions: 1 },
+      { version: "2.1.1", day: 1, model: "nvidia/nemotron-3.5-lightning:free", sessions: 1 },
+    ]);
+    const fs = detectHiddenModels(ds);
+    expect(fs).toHaveLength(1);
+    expect(fs[0].id).toBe("gateway-models");
+    expect(fs[0].severity).toBe("info");
+    expect(fs[0].explanation).toContain("nvidia/nemotron-3.5-lightning:free");
+  });
+
   it("warns when default effort drops across a version", () => {
     const ds = build([
       { version: "2.1.1", day: 0, effort: "high" },

@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- `check` no longer warns that a gateway model is a hidden or A/B test model. Ids in the `vendor/model` form (with an optional variant such as `:free`) come from a gateway you set up yourself, such as OpenRouter. They are now reported once per agent as info and skip the hidden-model check. On one real log set this removed 7 of 14 warnings.
+
 ## [0.5.0] - 2026-10-22
 
 nerf-watch now delivers its headline end to end: see what loads into every Claude Code session before you type, cut the parts you never use in one command, and prove it from your own logs. Every finding used to end in "report it to the vendor"; now it ends in a smaller, measured, reversible change.
