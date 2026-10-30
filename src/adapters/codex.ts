@@ -51,6 +51,7 @@ export const codexAdapter: Adapter = {
     let effort: string | undefined;
     let ctxWindow: number | undefined;
     let sidechain = false;
+    let scripted = false;
     let workloadKey: string | undefined;
     let lastTotal = -1;
     let sawFirst = false;
@@ -70,6 +71,7 @@ export const codexAdapter: Adapter = {
       if (o.type === "session_meta") {
         if (typeof p.cli_version === "string") version = p.cli_version;
         if (p.source && typeof p.source === "object" && "subagent" in p.source) sidechain = true;
+        if (p.source === "exec") scripted = true; // `codex exec`, the non-interactive mode
         if (typeof p.cwd === "string") workloadKey = workloadKeyFor("codex", p.cwd, typeof p.source === "string" ? p.source : "subagent");
         continue;
       }
@@ -121,6 +123,7 @@ export const codexAdapter: Adapter = {
             t.firstInSession = true;
             sawFirst = true;
           }
+          if (scripted) t.scripted = true;
           turns.push(t);
           break;
         }

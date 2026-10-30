@@ -9,6 +9,7 @@ All notable changes to this project are documented here. The format follows
 ### Fixed
 
 - `check` no longer warns that a gateway model is a hidden or A/B test model. Ids in the `vendor/model` form (with an optional variant such as `:free`) come from a gateway you set up yourself, such as OpenRouter. They are now reported once per agent as info and skip the hidden-model check. On one real log set this removed 7 of 14 warnings.
+- `check` no longer compares scripted sessions (`claude -p`, the Agent SDK, `codex exec`) with interactive ones for the startup prompt and default effort rules, matching what `overhead` already did. Scripted runs load a smaller startup and run at whatever effort the script passes, so a version where they happened to outnumber interactive sessions produced a false "startup prompt grew" alert (about 18k scripted vs 56k interactive) and a false "effort dropped" warning. On one real log set, `check` went from 2 alerts and 14 warnings to 1 alert and 4 warnings.
 
 ## [0.5.0] - 2026-10-22
 

@@ -141,6 +141,7 @@ export const claudeAdapter: Adapter = {
           t.firstInSession = true;
           sawFirst = true;
         }
+        if (client?.startsWith("sdk")) t.scripted = true;
         if (!sidechain && t.requestedModel && model && normalizeModel(t.requestedModel) !== normalizeModel(model)) unconfirmed.push(t);
         if (model) lastServed = model;
         if (key !== ":") turnsByKey.set(key, t);

@@ -44,6 +44,11 @@ export interface Turn {
   /** True for the first API response of a session (startup overhead signal). */
   firstInSession?: boolean;
   /**
+   * The session ran non-interactively (`claude -p`, the Agent SDK or `codex exec`). Scripted
+   * runs load a different startup, so the startup prompt rule leaves them out.
+   */
+  scripted?: boolean;
+  /**
    * Subagent / sidechain traffic. Excluded from requested-vs-served comparisons
    * and from token metrics, because its size depends on which subagent ran.
    */

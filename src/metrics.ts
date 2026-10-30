@@ -173,7 +173,8 @@ export const METRICS: Record<string, MetricDef> = {
     sampleUnit: "sessions",
     label: "prompt tokens on the first turn of a session (median)",
     compute(c, min = MIN) {
-      const f = c.turns.filter((t) => t.firstInSession && !t.sidechain);
+      // Scripted sessions load a smaller startup; mixing them in fakes a jump.
+      const f = c.turns.filter((t) => t.firstInSession && !t.sidechain && !t.scripted);
       if (f.length < min.firstTurns) return null;
       return { value: median(f.map(promptTokens)), samples: f.length };
     },
@@ -247,12 +248,13 @@ export function modalEffort(turns: Turn[]): { effort: string; share: number; sam
 /**
  * The effort each session started with, before the user changed it. Only
  * main-thread turns count; subagents inherit the parent's setting and would
- * let one long session outvote every other session.
+ * let one long session outvote every other session. Scripted sessions run
+ * with whatever effort the script passes, so they are not evidence of the default.
  */
 export function defaultEffortBySession(turns: Turn[]): { sessionKey: string; workloadKey?: string; effort: string }[] {
   const out = new Map<string, { sessionKey: string; workloadKey?: string; effort: string }>();
   for (const t of turns) {
-    if (t.sidechain || !t.effort || t.effortSetByUser || out.has(t.sessionKey)) continue;
+    if (t.sidechain || t.scripted || !t.effort || t.effortSetByUser || out.has(t.sessionKey)) continue;
     out.set(t.sessionKey, { sessionKey: t.sessionKey, workloadKey: t.workloadKey, effort: t.effort });
   }
   return [...out.values()];

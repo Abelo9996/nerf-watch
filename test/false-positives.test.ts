@@ -37,6 +37,8 @@ interface Spec {
   /** Turn index from which `effort` counts as user-chosen (default 2 when startEffort is set). */
   userEffortFrom?: number;
   contextWindow?: number;
+  /** Sessions run with `claude -p` or the Agent SDK. */
+  scripted?: boolean;
 }
 
 let seq = 0;
@@ -65,6 +67,7 @@ function build(specs: Spec[]): Dataset {
           effortSetByUser: userEffort || undefined,
           contextWindow: s.contextWindow,
           firstInSession: first || undefined,
+          scripted: s.scripted || undefined,
           usage: {
             input: 5,
             cacheCreation: first ? (s.firstPrompt ?? 20000) : Math.round((s.cacheCreation ?? 800) * jitter),
@@ -129,6 +132,59 @@ describe("false positive: subagent mix", () => {
     expect(f.map((x) => [x.id, x.severity])).toEqual([["cacheCreation-shift", "alert"]]);
     expect(f[0].evidence[1].versions?.[0]).toBe("2.1.4");
     expect(f[0].explanation).toContain("2 of 2 separate workloads");
+  });
+});
+
+describe("false positive: scripted sessions in the startup prompt", () => {
+  it("does not report startup growth when the before side is mostly claude -p runs", () => {
+    const ds = build([
+      ...mainline(["2.1.1", "2.1.2", "2.1.3"], { firstPrompt: 56000, sessions: 1 }),
+      // Scripted runs on the last baseline version load a much smaller startup and outnumber the interactive ones.
+      { version: "2.1.3", day: 11, workload: "proj-c", scripted: true, sessions: 8, firstPrompt: 18000 },
+      { version: "2.1.3", day: 12, workload: "proj-d", scripted: true, sessions: 8, firstPrompt: 18000 },
+      ...mainline(["2.1.4", "2.1.5", "2.1.6"], { firstPrompt: 56000, sessions: 1 }).map((x) => ({ ...x, day: x.day + 20 })),
+    ]);
+    expect(detectVersionShifts(ds).filter((f) => f.id === "firstTurnPrompt-shift")).toEqual([]);
+    // The same data with the scripted runs counted as interactive is the false alarm this guards against.
+    ds.turns.forEach((t) => (t.scripted = undefined));
+    expect(detectVersionShifts(ds).filter((f) => f.id === "firstTurnPrompt-shift")).not.toEqual([]);
+  });
+
+  it("does not read claude -p effort as the default", () => {
+    const ds = build([
+      ...mainline(["2.1.1", "2.1.2", "2.1.3"], { effort: "high" }),
+      { version: "2.1.4", day: 16, workload: "proj-a", effort: "high", sessions: 1 },
+      { version: "2.1.4", day: 17, workload: "proj-c", scripted: true, sessions: 8, effort: "medium" },
+      { version: "2.1.4", day: 18, workload: "proj-d", scripted: true, sessions: 8, effort: "medium" },
+    ]);
+    expect(detectEffortDrops(ds)).toEqual([]);
+    ds.turns.forEach((t) => (t.scripted = undefined));
+    expect(detectEffortDrops(ds)).not.toEqual([]);
+  });
+
+  it("marks codex exec sessions as scripted, and interactive ones not", async () => {
+    const rollout = (source: string) =>
+      writeLines(join(tmp(), "2026", "09", "01", "rollout.jsonl"), [
+        { timestamp: "2026-09-01T00:00:00Z", type: "session_meta", payload: { id: "x", cli_version: "0.141.0", source, cwd: "/w" } },
+        { timestamp: "2026-09-01T00:00:01Z", type: "turn_context", payload: { model: "gpt-5.5" } },
+        { timestamp: "2026-09-01T00:00:02Z", type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { total_tokens: 10 }, last_token_usage: { input_tokens: 8, cached_input_tokens: 0, output_tokens: 2 } } } },
+      ]);
+    const exec = await codexAdapter.parseFile(rollout("exec"));
+    const ide = await codexAdapter.parseFile(rollout("vscode"));
+    expect(exec.turns).toHaveLength(1);
+    expect(exec.turns[0].scripted).toBe(true);
+    expect(ide.turns).toHaveLength(1);
+    expect(ide.turns[0].scripted).toBeUndefined();
+  });
+
+  it("marks sdk-cli sessions as scripted in Claude Code logs", async () => {
+    const rows = claudeLines([{ prompt: "hi" }, { text: "ok" }]).map((r: any) =>
+      r.type === "assistant" ? { ...r, entrypoint: "sdk-cli", message: { ...r.message, usage: { input_tokens: 5, cache_creation_input_tokens: 18000, output_tokens: 5 } } } : { ...r, entrypoint: "sdk-cli" },
+    );
+    const f = writeLines(join(tmp(), "p", "s.jsonl"), rows);
+    const parsed = await claudeAdapter.parseFile(f);
+    expect(parsed.turns.length).toBeGreaterThan(0);
+    expect(parsed.turns.every((t) => t.scripted)).toBe(true);
   });
 });
 

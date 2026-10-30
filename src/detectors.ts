@@ -213,7 +213,7 @@ export function compareCohorts(rule: Rule, before: Cohort, after: Cohort): Compa
   const bw = byWorkload(before);
   const aw = byWorkload(after);
   if (rule.stratified === "spread") {
-    const spread = (c: Cohort) => new Set(c.turns.filter((t) => t.firstInSession && !t.sidechain).map((t) => t.workloadKey ?? "")).size;
+    const spread = (c: Cohort) => new Set(c.turns.filter((t) => t.firstInSession && !t.sidechain && !t.scripted).map((t) => t.workloadKey ?? "")).size;
     const keyed = (c: Cohort) => c.turns.some((t) => t.workloadKey);
     if ((keyed(before) && spread(before) < MIN_WORKLOADS) || (keyed(after) && spread(after) < MIN_WORKLOADS)) return null;
     return { severity: pooled, before: b, after: a };
